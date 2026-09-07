@@ -29,6 +29,7 @@ The result must preserve StackChan's existing AI voice mode, avatar expressions,
 - Media home, local library, radio list, and shared now-playing screens adapted to 320x240 LVGL 9.
 - Preservation of avatar and servo update behavior in both normal and AI runtimes.
 - Safe, explicit transition between media and Xiaozhi AI runtime.
+- Hard-muted startup and test behavior: every boot and every automated audio test starts at 0% output volume.
 
 ### Deferred
 
@@ -77,7 +78,7 @@ Mooncake installs the launcher and `AppMedia`. Media playback may continue while
 
 ### Returning from AI runtime
 
-The existing warm-reboot path returns to Mooncake. `AppMedia` reads the saved session and shows a resumable card. Automatic audio resume is disabled by default; the user taps Resume to avoid unexpected sound after a reboot.
+The existing warm-reboot path returns to Mooncake. `AppMedia` reads the saved session and shows a resumable card. Automatic audio resume is disabled by default; the user taps Resume to avoid unexpected sound after a reboot. The restored session does not restore an audible hardware volume: output remains at 0% until the user explicitly raises it.
 
 This design preserves the existing Xiaozhi internals and avoids simultaneous ownership of I2S0.
 
@@ -170,7 +171,7 @@ Persist to NVS only on meaningful transitions and with write coalescing:
 - file path hash or station identifier;
 - playback position;
 - queue and play mode;
-- volume;
+- last requested volume for UI context, while applied hardware volume still resets to 0% on every boot and test start;
 - last media screen;
 - clean-shutdown marker for AI handoff.
 
@@ -219,6 +220,8 @@ Avatar and servo updates remain active. Media screens do not directly command co
 - No logging, floating-point FFT, file I/O, or UI work occurs in I2S/USB callbacks.
 - Radio playback has priority over nonessential scans, metadata artwork fetches, and future downloads.
 - Entering AI requires a confirmed idle audio sink before Xiaozhi starts.
+- The codec output volume is set to 0% before output is enabled. Automated sine, PCM, DMA, decoder, USB, and long-run tests remain muted and verify counters/state rather than audible output.
+- Producing audible test sound requires explicit user authorization at the time of that test; prior approval of this design is not authorization to unmute later.
 
 ## 9. Error Handling
 
@@ -249,6 +252,8 @@ Each item is a separate implementation checkpoint; a failing checkpoint blocks l
 ## 11. Acceptance Criteria
 
 - Existing AI voice mode starts and behaves as on the target baseline.
+- Cold boot, warm reboot, AI return, media restore, and every automated audio test leave the applied output volume at 0%.
+- No test raises hardware volume or produces intentional audible sound without explicit user authorization for that individual test run.
 - Existing avatar expressions and servo updates work in normal and AI modes.
 - Local playback runs for two hours without audible underrun or UI lockup.
 - Radio runs for two hours and recovers from a temporary Wi-Fi interruption.
