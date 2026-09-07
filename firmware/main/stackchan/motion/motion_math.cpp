@@ -11,7 +11,8 @@ namespace stackchan::motion {
 
 namespace {
 
-constexpr float kRadiansToDegrees = 180.0f / static_cast<float>(M_PI);
+constexpr float kPi = 3.14159265358979323846f;
+constexpr float kRadiansToDegrees = 180.0f / kPi;
 
 float clampNormalized(float value)
 {
@@ -42,8 +43,8 @@ int mapNormalizedValueToAngle(float value, int minimum, int maximum)
 MotionAngles calculateNormalizedLookAngles(float x, float y, int yawMin, int yawMax, int pitchMin, int pitchMax)
 {
     return {
-        .yaw = mapNormalizedValueToAngle(x, yawMin, yawMax),
-        .pitch = mapNormalizedValueToAngle(y, pitchMin, pitchMax),
+        mapNormalizedValueToAngle(x, yawMin, yawMax),
+        mapNormalizedValueToAngle(y, pitchMin, pitchMax),
     };
 }
 
@@ -54,8 +55,8 @@ MotionAngles calculatePointLookAngles(float x, float y, float z)
     float pitchRadians = std::atan2(z, groundDistance);
 
     return {
-        .yaw = radiansToTenthsOfDegrees(yawRadians),
-        .pitch = radiansToTenthsOfDegrees(pitchRadians),
+        radiansToTenthsOfDegrees(yawRadians),
+        radiansToTenthsOfDegrees(pitchRadians),
     };
 }
 
