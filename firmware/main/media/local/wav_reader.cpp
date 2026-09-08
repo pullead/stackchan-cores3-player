@@ -1,7 +1,5 @@
 #include "media/local/wav_reader.h"
 
-#include <limits>
-
 namespace media {
 namespace {
 
@@ -37,12 +35,18 @@ bool add_within_limit(size_t value, size_t amount, size_t limit, size_t* result)
 
 }  // namespace
 
-bool WavReader::open(const std::vector<uint8_t>& bytes) noexcept {
-    return open(bytes.data(), bytes.size());
+bool WavReader::open(const std::vector<uint8_t>& bytes) {
+    reset();
+    owned_bytes_ = bytes;
+    return open_bytes(owned_bytes_.data(), owned_bytes_.size());
 }
 
 bool WavReader::open(const uint8_t* bytes, size_t size) noexcept {
     reset();
+    return open_bytes(bytes, size);
+}
+
+bool WavReader::open_bytes(const uint8_t* bytes, size_t size) noexcept {
     const auto fail = [this]() noexcept {
         reset();
         return false;
@@ -90,7 +94,7 @@ bool WavReader::open(const uint8_t* bytes, size_t size) noexcept {
             format_ = {sample_rate, static_cast<uint8_t>(channels), static_cast<uint8_t>(bits_per_sample)};
             have_format = true;
         } else if (has_id(bytes, cursor, "data")) {
-            if (have_data || (chunk_size & 1U) != 0U) {
+            if (!have_format || have_data || (chunk_size & 1U) != 0U) {
                 return fail();
             }
             data_offset_ = payload_offset;
@@ -133,13 +137,17 @@ size_t WavReader::read_frames(int16_t* destination, size_t max_frames) noexcept 
     }
     const size_t frames = remaining_frames() < max_frames ? remaining_frames() : max_frames;
     for (size_t index = 0; index < frames; ++index) {
-        destination[index] = static_cast<int16_t>(read_u16(bytes_, position_));
+        const uint16_t unsigned_sample = read_u16(bytes_, position_);
+        destination[index] = unsigned_sample <= 0x7fffU
+                                 ? static_cast<int16_t>(unsigned_sample)
+                                 : static_cast<int16_t>(static_cast<int32_t>(unsigned_sample) - 0x10000);
         position_ += kBytesPerFrame;
     }
     return frames;
 }
 
 void WavReader::reset() noexcept {
+    owned_bytes_.clear();
     bytes_ = nullptr;
     data_offset_ = 0;
     data_end_ = 0;
