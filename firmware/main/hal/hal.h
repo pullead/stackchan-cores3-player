@@ -118,7 +118,6 @@ struct XiaozhiConfig_t {
     uint32_t idleShutdownTimeSeconds = 600;
     bool allowShutdownWhenCharging   = false;
     uint8_t idleRandomMovementLevel  = 2;
-    bool startAiAgentOnBoot          = false;
 };
 
 /**

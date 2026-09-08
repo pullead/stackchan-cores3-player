@@ -209,7 +209,6 @@ XiaozhiConfig_t Hal::getXiaozhiConfig()
         .idleShutdownTimeSeconds   = bridge_config.idleShutdownTimeSeconds,
         .allowShutdownWhenCharging = bridge_config.allowShutdownWhenCharging,
         .idleRandomMovementLevel   = bridge_config.idleRandomMovementLevel,
-        .startAiAgentOnBoot        = bridge_config.startAiAgentOnBoot,
     };
 }
 
@@ -219,7 +218,6 @@ void Hal::setXiaozhiConfig(XiaozhiConfig_t config)
         .idleShutdownTimeSeconds   = config.idleShutdownTimeSeconds,
         .allowShutdownWhenCharging = config.allowShutdownWhenCharging,
         .idleRandomMovementLevel   = config.idleRandomMovementLevel,
-        .startAiAgentOnBoot        = config.startAiAgentOnBoot,
     });
 }
 
