@@ -54,3 +54,16 @@ target_include_directories(media_speaker_sink_test PRIVATE
 target_compile_features(media_speaker_sink_test PRIVATE cxx_std_17)
 
 add_test(NAME media_speaker_sink_test COMMAND $<TARGET_FILE:media_speaker_sink_test>)
+
+add_executable(wav_reader_test
+    wav_reader_test.cpp
+    ../main/media/local/wav_reader.cpp
+)
+
+target_include_directories(wav_reader_test PRIVATE
+    ../main
+)
+
+target_compile_features(wav_reader_test PRIVATE cxx_std_17)
+
+add_test(NAME wav_reader_test COMMAND $<TARGET_FILE:wav_reader_test>)
