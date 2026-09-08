@@ -41,3 +41,16 @@ target_include_directories(media_state_machine_test PRIVATE
 target_compile_features(media_state_machine_test PRIVATE cxx_std_17)
 
 add_test(NAME media_state_machine_test COMMAND $<TARGET_FILE:media_state_machine_test>)
+
+add_executable(media_speaker_sink_test
+    media_speaker_sink_test.cpp
+    ../main/media/audio/core_s3_speaker_sink.cpp
+)
+
+target_include_directories(media_speaker_sink_test PRIVATE
+    ../main
+)
+
+target_compile_features(media_speaker_sink_test PRIVATE cxx_std_17)
+
+add_test(NAME media_speaker_sink_test COMMAND $<TARGET_FILE:media_speaker_sink_test>)
