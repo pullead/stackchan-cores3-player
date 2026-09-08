@@ -738,13 +738,9 @@ void hal_bridge::board_set_speaker_volume(uint8_t volume, bool permanent)
 
 uint8_t hal_bridge::board_get_speaker_volume()
 {
-    int volume = 70;
     Settings settings("audio", false);
-    volume = settings.GetInt("output_volume", volume);
-    if (volume <= 0) {
-        volume = 10;
-    }
-    return volume;
+    const int volume = settings.GetInt("output_volume", 0);
+    return static_cast<uint8_t>(std::clamp(volume, 0, 100));
 }
 
 void hal_bridge::toggle_xiaozhi_chat_state()

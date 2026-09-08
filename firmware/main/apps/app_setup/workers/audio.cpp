@@ -5,6 +5,7 @@
  */
 #include "workers.h"
 #include <hal/hal.h>
+#include <media/audio/volume_policy.h>
 #include <mooncake_log.h>
 
 using namespace smooth_ui_toolkit::lvgl_cpp;
@@ -23,8 +24,7 @@ static constexpr uint32_t _waveform_update_interval_ms = 1000 / 24;
 
 MicTestWorker::MicTestWorker()
 {
-    _original_volume = GetHAL().getSpeakerVolume();
-    GetHAL().setSpeakerVolume(100, false);
+    GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
     _waveform_frame.resize(_waveform_point_count, 0);
 
     _panel = std::make_unique<Container>(lv_screen_active());
@@ -70,7 +70,7 @@ MicTestWorker::MicTestWorker()
 MicTestWorker::~MicTestWorker()
 {
     GetHAL().clearupMicTest();
-    GetHAL().setSpeakerVolume(_original_volume, false);
+    GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
 }
 
 void MicTestWorker::update()

@@ -9,6 +9,7 @@
 #include <mooncake.h>
 #include <apps/apps.h>
 #include <hal/hal.h>
+#include <media/audio/volume_policy.h>
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -21,6 +22,7 @@ extern "C" void app_main(void)
 
     // HAL init
     GetHAL().init();
+    GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
 
     // Setup ui hal
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });

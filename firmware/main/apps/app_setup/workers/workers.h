@@ -187,7 +187,6 @@ private:
     bool _back_flag              = false;
     bool _is_testing             = false;
     int _waveform_series         = -1;
-    uint8_t _original_volume     = 80;
     uint32_t _last_waveform_tick = 0;
     std::string _error_message;
     std::vector<int16_t> _waveform_frame;

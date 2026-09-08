@@ -13,6 +13,7 @@
 #include <board.h>
 #include <audio/audio_codec.h>
 #include <hal/board/config.h>
+#include <media/audio/volume_policy.h>
 
 static const std::string_view _tag = "HAL-Audio";
 
@@ -90,6 +91,7 @@ std::string Hal::startMicTest(std::function<void(MicTestStatus)> onStatusUpdate)
         return "mic test captured no audio";
     }
 
+    setSpeakerVolume(media::kMutedVolumePercent, false);
     audio_codec->EnableOutput(true);
     onStatusUpdate(MicTestStatus::Playing);
 
@@ -160,15 +162,15 @@ void Hal::clearupMicTest()
 {
     auto& board      = Board::GetInstance();
     auto audio_codec = board.GetAudioCodec();
-    if (!audio_codec) {
-        return;
+    if (audio_codec) {
+        if (audio_codec->output_enabled()) {
+            audio_codec->EnableOutput(false);
+        }
+
+        if (audio_codec->input_enabled()) {
+            audio_codec->EnableInput(false);
+        }
     }
 
-    if (audio_codec->output_enabled()) {
-        audio_codec->EnableOutput(false);
-    }
-
-    if (audio_codec->input_enabled()) {
-        audio_codec->EnableInput(false);
-    }
+    setSpeakerVolume(media::kMutedVolumePercent, false);
 }
