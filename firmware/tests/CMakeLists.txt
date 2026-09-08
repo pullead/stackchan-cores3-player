@@ -82,3 +82,15 @@ target_include_directories(local_playback_controller_test PRIVATE
 target_compile_features(local_playback_controller_test PRIVATE cxx_std_17)
 
 add_test(NAME local_playback_controller_test COMMAND $<TARGET_FILE:local_playback_controller_test>)
+
+add_executable(sd_card_port_test
+    sd_card_port_test.cpp
+)
+
+target_include_directories(sd_card_port_test PRIVATE
+    ../main
+)
+
+target_compile_features(sd_card_port_test PRIVATE cxx_std_17)
+
+add_test(NAME sd_card_port_test COMMAND $<TARGET_FILE:sd_card_port_test>)
