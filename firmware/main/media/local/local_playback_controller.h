@@ -25,6 +25,10 @@ public:
     static constexpr size_t kPlaybackChunkFrames = 1024;
 
     explicit LocalPlaybackController(AudioSink& sink);
+    LocalPlaybackController(const LocalPlaybackController&) = delete;
+    LocalPlaybackController& operator=(const LocalPlaybackController&) = delete;
+    LocalPlaybackController(LocalPlaybackController&&) = delete;
+    LocalPlaybackController& operator=(LocalPlaybackController&&) = delete;
 
     void select(std::string title, std::vector<uint8_t> wav_bytes);
     bool start();
@@ -46,6 +50,8 @@ private:
     std::vector<uint8_t> selected_bytes_;
     size_t total_frames_ = 0;
     size_t played_frames_ = 0;
+    std::vector<int16_t> pending_pcm_;
+    size_t pending_offset_ = 0;
     std::string error_;
     bool sink_open_ = false;
 };

@@ -1,6 +1,5 @@
 #include "media/local/local_playback_controller.h"
 
-#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -14,6 +13,8 @@ void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav
     selected_bytes_ = std::move(wav_bytes);
     total_frames_ = 0;
     played_frames_ = 0;
+    pending_pcm_.clear();
+    pending_offset_ = 0;
     error_.clear();
 }
 
@@ -26,6 +27,8 @@ bool LocalPlaybackController::start() {
     error_.clear();
     total_frames_ = 0;
     played_frames_ = 0;
+    pending_pcm_.clear();
+    pending_offset_ = 0;
     state_machine_.transition(PlaybackState::Preparing);
     if (!reader_.open(selected_bytes_)) {
         fail("Invalid or unsupported WAV");
@@ -54,19 +57,31 @@ void LocalPlaybackController::pump() {
         return;
     }
 
-    std::array<int16_t, kPlaybackChunkFrames> frames{};
-    const size_t frame_count = reader_.read_frames(frames.data(), frames.size());
-    if (frame_count == 0) {
-        stop_pipeline();
-        return;
+    if (pending_pcm_.empty()) {
+        std::array<int16_t, kPlaybackChunkFrames> frames{};
+        const size_t frame_count = reader_.read_frames(frames.data(), frames.size());
+        if (frame_count == 0) {
+            stop_pipeline();
+            return;
+        }
+        pending_pcm_.assign(frames.begin(), frames.begin() + frame_count);
+        pending_offset_ = 0;
     }
 
-    const size_t written = sink_.write(frames.data(), frame_count);
-    played_frames_ += std::min(written, frame_count);
-    if (written != frame_count) {
+    const size_t pending_frames = pending_pcm_.size() - pending_offset_;
+    const size_t written = sink_.write(pending_pcm_.data() + pending_offset_, pending_frames);
+    if (written == 0 || written > pending_frames) {
         fail("Audio sink write failed");
         return;
     }
+    played_frames_ += written;
+    pending_offset_ += written;
+    if (pending_offset_ != pending_pcm_.size()) {
+        return;
+    }
+
+    pending_pcm_.clear();
+    pending_offset_ = 0;
     if (reader_.remaining_frames() == 0) {
         stop_pipeline();
     }
@@ -107,6 +122,8 @@ void LocalPlaybackController::fail(std::string error) {
 }
 
 void LocalPlaybackController::stop_pipeline() {
+    pending_pcm_.clear();
+    pending_offset_ = 0;
     if (state_machine_.state() == PlaybackState::Idle) {
         return;
     }
