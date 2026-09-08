@@ -67,3 +67,18 @@ target_include_directories(wav_reader_test PRIVATE
 target_compile_features(wav_reader_test PRIVATE cxx_std_17)
 
 add_test(NAME wav_reader_test COMMAND $<TARGET_FILE:wav_reader_test>)
+
+add_executable(local_playback_controller_test
+    local_playback_controller_test.cpp
+    ../main/media/local/local_playback_controller.cpp
+    ../main/media/local/wav_reader.cpp
+    ../main/media/media_state_machine.cpp
+)
+
+target_include_directories(local_playback_controller_test PRIVATE
+    ../main
+)
+
+target_compile_features(local_playback_controller_test PRIVATE cxx_std_17)
+
+add_test(NAME local_playback_controller_test COMMAND $<TARGET_FILE:local_playback_controller_test>)
