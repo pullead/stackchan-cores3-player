@@ -1,0 +1,2 @@
+# Keep this unified diff byte-stable when Git's CRLF conversion is enabled.
+firmware/patches/xiaozhi-esp32.patch text eol=lf
