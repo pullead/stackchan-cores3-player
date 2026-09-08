@@ -100,6 +100,13 @@ bool test_rejects_bad_riff_signature() {
            check(reader.remaining_frames() == 0, "failed open resets state");
 }
 
+bool test_rejects_bad_wave_signature() {
+    auto bytes = compatible_wav();
+    bytes[8] = 'X';
+    media::WavReader reader;
+    return check(!reader.open(bytes), "wrong WAVE signature is rejected");
+}
+
 bool test_rejects_chunk_that_runs_past_riff() {
     auto bytes = compatible_wav();
     bytes[16] = 0xff;
@@ -126,14 +133,20 @@ bool test_rejects_stereo_44100_and_8bit_formats() {
 }
 
 bool test_rejects_truncated_fmt_chunk() {
-    auto bytes = compatible_wav();
-    bytes[28] = 0x10;
-    bytes[29] = 0;
-    bytes[30] = 0;
-    bytes[31] = 0;
-    bytes.resize(44);
+    std::vector<uint8_t> bytes;
+    append_id(bytes, "RIFF");
+    append_u32(bytes, 0);  // Filled after the physically truncated fmt chunk is added.
+    append_id(bytes, "WAVE");
+    append_id(bytes, "fmt ");
+    append_u32(bytes, 16);
+    bytes.insert(bytes.end(), 12, 0);
+    const uint32_t riff_size = static_cast<uint32_t>(bytes.size() - 8);
+    bytes[4] = static_cast<uint8_t>(riff_size & 0xff);
+    bytes[5] = static_cast<uint8_t>((riff_size >> 8) & 0xff);
+    bytes[6] = static_cast<uint8_t>((riff_size >> 16) & 0xff);
+    bytes[7] = static_cast<uint8_t>((riff_size >> 24) & 0xff);
     media::WavReader reader;
-    return check(!reader.open(bytes), "truncated fmt payload is rejected");
+    return check(!reader.open(bytes), "physically truncated fmt payload is rejected");
 }
 
 bool test_failed_reopen_clears_previous_format_and_data() {
@@ -159,6 +172,7 @@ int main() {
     failures += !test_opens_compatible_wav_after_unknown_chunk();
     failures += !test_reads_frames_and_tracks_remaining_count();
     failures += !test_rejects_bad_riff_signature();
+    failures += !test_rejects_bad_wave_signature();
     failures += !test_rejects_chunk_that_runs_past_riff();
     failures += !test_rejects_stereo_44100_and_8bit_formats();
     failures += !test_rejects_truncated_fmt_chunk();
