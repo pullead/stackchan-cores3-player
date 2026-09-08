@@ -28,3 +28,16 @@ target_include_directories(media_volume_policy_test PRIVATE
 target_compile_features(media_volume_policy_test PRIVATE cxx_std_17)
 
 add_test(NAME media_volume_policy_test COMMAND $<TARGET_FILE:media_volume_policy_test>)
+
+add_executable(media_state_machine_test
+    media_state_machine_test.cpp
+    ../main/media/media_state_machine.cpp
+)
+
+target_include_directories(media_state_machine_test PRIVATE
+    ../main
+)
+
+target_compile_features(media_state_machine_test PRIVATE cxx_std_17)
+
+add_test(NAME media_state_machine_test COMMAND $<TARGET_FILE:media_state_machine_test>)
