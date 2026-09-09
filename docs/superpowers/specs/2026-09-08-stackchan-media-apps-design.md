@@ -41,9 +41,11 @@ All LVGL actions use `LvglLockGuard`. Apps use compact CoreS3-sized list and now
 
 ### Hardware gate: microSD browse only
 
-CoreS3 uses SPI3 pins CLK 36, MOSI 37, MISO 35, CS 4 for microSD, while the current display configuration uses SPI3 and GPIO 35 for LCD D/C. A board-specific `SdCardPort` is therefore required; it must share rather than reinitialize the bus and it must not format a card on mount failure.
+CoreS3 uses SPI3 pins CLK 36, MOSI 37, MISO 35, CS 4 for microSD, while the current display configuration uses SPI3 and GPIO 35 for LCD D/C. The implementation therefore requires a board-owned `Spi3DisplayHandoff` in addition to `SdCardPort`. Storage code must never access SPI3 outside this handoff and must not reinitialize the bus or format a card on mount failure.
 
-The first device checkpoint mounts a FAT32 microSD card, lists a bounded number of supported files, and verifies the LCD/touch stay usable. No `AudioSink::open` or PCM output is allowed in this checkpoint. If the display and microSD cannot coexist with the current board driver, work stops at this hardware conflict rather than guessing at pin remapping.
+Before every SD transaction, the handoff locks LVGL, drains queued LCD DMA, and leaves GPIO35 as an input for SD MISO. SD CS must be high before the handoff releases the display lock; the next LCD transaction may then drive GPIO35 as D/C through the ESP-IDF LCD pre/post callbacks. Directory scans mount, scan, and unmount while the display is paused. Later file streaming uses bounded 4-16 KiB reads through the same handoff so the display can refresh between reads.
+
+The first device checkpoint mounts a FAT32 microSD card, lists a bounded number of supported files, unmounts it, and verifies the LCD/touch stay usable through repeated scans. No `AudioSink::open` or PCM output is allowed in this checkpoint. Any LCD corruption, SD CRC/I/O error, reset, or failure to restore touch/display blocks playback work.
 
 ### Silent WAV vertical slice
 
