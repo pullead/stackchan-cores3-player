@@ -241,9 +241,10 @@ bool drain_display(void* raw_context, std::string& error) {
 
 bool set_shared_pin_input(void*, std::string& error) {
     // CoreS3 shares GPIO35 between LCD D/C and SPI3 MISO.  Direction alone is
-    // insufficient: the GPIO output matrix must be returned to FSPIQ while SD
-    // traffic owns the bus, then the output driver must be disabled (M5GFX convention).
-    REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, FSPIQ_OUT_IDX);
+    // insufficient: the GPIO output matrix must be returned to SPI3 Q while SD
+    // traffic owns the bus, then the output driver must be disabled. This board
+    // uses SPI3_HOST, whose MISO signal is SPI3_Q (not FSPIQ).
+    REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SPI3_Q_OUT_IDX);
     REG_WRITE(GPIO_ENABLE1_W1TC_REG, 1u << (GPIO_NUM_35 & 31));
     const esp_err_t result = gpio_set_direction(GPIO_NUM_35, GPIO_MODE_INPUT);
     if (result != ESP_OK) {
