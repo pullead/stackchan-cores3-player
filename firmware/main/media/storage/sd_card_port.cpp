@@ -113,6 +113,7 @@ constexpr char kMountPath[] = "/sdcard";
 constexpr gpio_num_t kSdChipSelectPin = GPIO_NUM_4;
 constexpr size_t kMaxTracks = 64;
 constexpr char kTag[] = "SdCardPort";
+constexpr int kSdDiagnosticClockKHz = SDMMC_FREQ_PROBING;
 
 std::string title_from_filename(std::string_view filename) {
     return std::string(filename.substr(0, filename.size() - 4));
@@ -121,6 +122,7 @@ std::string title_from_filename(std::string_view filename) {
 std::string raw_card_diagnostic() {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI3_HOST;
+    host.max_freq_khz = kSdDiagnosticClockKHz;
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.host_id = SPI3_HOST;
     slot_config.gpio_cs = kSdChipSelectPin;
@@ -173,6 +175,7 @@ bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI3_HOST;
+    host.max_freq_khz = kSdDiagnosticClockKHz;
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.host_id = SPI3_HOST;
     slot_config.gpio_cs = kSdChipSelectPin;
@@ -182,6 +185,7 @@ bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
     mount_config.max_files = 4;
 
     sdmmc_card_t* card = nullptr;
+    ESP_LOGI(kTag, "TF browse-only mount at %d kHz", kSdDiagnosticClockKHz);
     const esp_err_t result = esp_vfs_fat_sdspi_mount(kMountPath, &host, &slot_config, &mount_config, &card);
     if (result != ESP_OK) {
         error = esp_err_to_name(result);
