@@ -122,3 +122,16 @@ target_include_directories(local_music_presenter_test PRIVATE
 target_compile_features(local_music_presenter_test PRIVATE cxx_std_17)
 
 add_test(NAME local_music_presenter_test COMMAND $<TARGET_FILE:local_music_presenter_test>)
+
+add_executable(sd_card_diagnostic_test
+    sd_card_diagnostic_test.cpp
+    ../main/media/storage/sd_card_diagnostic.cpp
+)
+
+target_include_directories(sd_card_diagnostic_test PRIVATE
+    ../main
+)
+
+target_compile_features(sd_card_diagnostic_test PRIVATE cxx_std_17)
+
+add_test(NAME sd_card_diagnostic_test COMMAND $<TARGET_FILE:sd_card_diagnostic_test>)

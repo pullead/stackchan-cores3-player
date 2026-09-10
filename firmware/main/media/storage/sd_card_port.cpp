@@ -93,6 +93,7 @@ void SdCardPort::append_error(std::string_view error) {
 
 #ifdef ESP_PLATFORM
 
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <dirent.h>
@@ -102,6 +103,7 @@ void SdCardPort::append_error(std::string_view error) {
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
+#include "media/storage/sd_card_diagnostic.h"
 #include "sdmmc_cmd.h"
 
 namespace media {
@@ -114,6 +116,50 @@ constexpr char kTag[] = "SdCardPort";
 
 std::string title_from_filename(std::string_view filename) {
     return std::string(filename.substr(0, filename.size() - 4));
+}
+
+std::string raw_card_diagnostic() {
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI3_HOST;
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.host_id = SPI3_HOST;
+    slot_config.gpio_cs = kSdChipSelectPin;
+
+    sdspi_dev_handle_t device = -1;
+    esp_err_t result = sdspi_host_init_device(&slot_config, &device);
+    if (result != ESP_OK) {
+        return std::string("raw device init failed: ") + esp_err_to_name(result);
+    }
+
+    host.slot = device;
+    sdmmc_card_t card = {};
+    alignas(4) SdSector mbr = {};
+    alignas(4) SdSector boot_sector = {};
+    std::string description;
+
+    result = sdmmc_card_init(&host, &card);
+    if (result == ESP_OK) {
+        result = sdmmc_read_sectors(&card, mbr.data(), 0, 1);
+    }
+    if (result != ESP_OK) {
+        description = std::string("raw sector read failed: ") + esp_err_to_name(result);
+    } else if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
+        description = describe_raw_card(mbr, boot_sector);
+    } else {
+        const uint32_t partition_lba = static_cast<uint32_t>(mbr[446 + 8]) |
+                                       (static_cast<uint32_t>(mbr[446 + 9]) << 8) |
+                                       (static_cast<uint32_t>(mbr[446 + 10]) << 16) |
+                                       (static_cast<uint32_t>(mbr[446 + 11]) << 24);
+        result = sdmmc_read_sectors(&card, boot_sector.data(), partition_lba, 1);
+        if (result != ESP_OK) {
+            description = std::string("raw boot sector read failed: ") + esp_err_to_name(result);
+        } else {
+            description = describe_raw_card(mbr, boot_sector);
+        }
+    }
+
+    sdspi_host_remove_device(device);
+    return description;
 }
 
 }  // namespace
@@ -139,6 +185,11 @@ bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
     const esp_err_t result = esp_vfs_fat_sdspi_mount(kMountPath, &host, &slot_config, &mount_config, &card);
     if (result != ESP_OK) {
         error = esp_err_to_name(result);
+        const std::string raw_description = raw_card_diagnostic();
+        if (!raw_description.empty()) {
+            error += "; " + raw_description;
+            ESP_LOGW(kTag, "TF raw read-only diagnostic: %s", raw_description.c_str());
+        }
         ESP_LOGW(kTag, "TF browse-only mount failed: %s", error.c_str());
         return false;
     }
