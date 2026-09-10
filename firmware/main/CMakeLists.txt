@@ -405,6 +405,10 @@ set(DEFAULT_ASSETS_EXTRA_FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/assets_bin")
 function(build_default_assets_bin)
     # Set output path for generated assets.bin
     set(GENERATED_ASSETS_BIN "${CMAKE_BINARY_DIR}/generated_assets.bin")
+
+    file(GLOB_RECURSE DEFAULT_ASSETS_EXTRA_FILE_DEPENDENCIES CONFIGURE_DEPENDS
+        "${DEFAULT_ASSETS_EXTRA_FILES}/*"
+    )
     
     # Prepare arguments for build script
     set(BUILD_ARGS
@@ -437,6 +441,7 @@ function(build_default_assets_bin)
         DEPENDS
             ${SDKCONFIG}
             ${XIAOZHI_MAIN_DIR}/../scripts/build_default_assets.py
+            ${DEFAULT_ASSETS_EXTRA_FILE_DEPENDENCIES}
         COMMENT "Building default assets.bin based on configuration"
         VERBATIM
     )

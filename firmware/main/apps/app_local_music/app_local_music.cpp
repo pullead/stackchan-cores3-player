@@ -1,5 +1,6 @@
 #include "app_local_music.h"
 
+#include <assets/assets.h>
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
 #include <mooncake_log.h>
@@ -17,6 +18,8 @@ constexpr uint32_t kAccent = 0xA9DDD1;
 
 AppLocalMusic::AppLocalMusic() {
     setAppInfo().name = "LOCAL MUSIC";
+    static auto icon = assets::get_image("local_music_icon.png");
+    setAppInfo().icon = (void*)&icon;
     static uint32_t theme_color = 0x6FC7B3;
     setAppInfo().userData = &theme_color;
 }
