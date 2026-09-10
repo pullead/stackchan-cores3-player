@@ -32,8 +32,11 @@ public:
     const std::string& last_error() const noexcept;
 
 private:
+    friend class Spi3DisplayHandoffGuard;
+
+    bool acquire(bool& release_required);
     bool is_configured() const noexcept;
-    void fail_and_unlock(bool leave_sd_deselected) noexcept;
+    void fail_and_unlock(bool leave_sd_deselected);
 
     Spi3DisplayHandoffOperations operations_;
     bool acquired_ = false;

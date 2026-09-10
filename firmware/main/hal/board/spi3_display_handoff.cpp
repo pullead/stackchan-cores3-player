@@ -25,6 +25,12 @@ bool Spi3DisplayHandoff::configure(Spi3DisplayHandoffOperations operations) noex
 }
 
 bool Spi3DisplayHandoff::acquire() {
+    bool release_required = false;
+    return acquire(release_required);
+}
+
+bool Spi3DisplayHandoff::acquire(bool& release_required) {
+    release_required = false;
     if (acquired_) {
         last_error_ = "SPI3 display handoff is already acquired";
         return false;
@@ -36,6 +42,7 @@ bool Spi3DisplayHandoff::acquire() {
 
     last_error_.clear();
     operations_.lock_display(operations_.context);
+    acquired_ = true;
 
     if (!operations_.drain_display(operations_.context, last_error_)) {
         if (last_error_.empty()) {
@@ -49,10 +56,10 @@ bool Spi3DisplayHandoff::acquire() {
             last_error_ = "failed to release the shared display pin";
         }
         fail_and_unlock(true);
+        release_required = acquired_;
         return false;
     }
 
-    acquired_ = true;
     return true;
 }
 
@@ -63,13 +70,13 @@ bool Spi3DisplayHandoff::release() noexcept {
 
     std::string release_error;
     const bool cs_high = operations_.set_sd_chip_select_high(operations_.context, release_error);
-    operations_.unlock_display(operations_.context);
-    acquired_ = false;
-
     if (!cs_high) {
         last_error_ = release_error.empty() ? "failed to deselect the SD card" : std::move(release_error);
         return false;
     }
+
+    operations_.unlock_display(operations_.context);
+    acquired_ = false;
     last_error_.clear();
     return true;
 }
@@ -88,16 +95,29 @@ bool Spi3DisplayHandoff::is_configured() const noexcept {
            operations_.unlock_display != nullptr;
 }
 
-void Spi3DisplayHandoff::fail_and_unlock(bool leave_sd_deselected) noexcept {
+void Spi3DisplayHandoff::fail_and_unlock(bool leave_sd_deselected) {
     if (leave_sd_deselected) {
-        std::string ignored_error;
-        operations_.set_sd_chip_select_high(operations_.context, ignored_error);
+        std::string release_error;
+        if (!operations_.set_sd_chip_select_high(operations_.context, release_error)) {
+            if (!last_error_.empty()) {
+                last_error_ += "; ";
+            }
+            last_error_ += release_error.empty() ? "failed to deselect the SD card" : release_error;
+            return;
+        }
     }
     operations_.unlock_display(operations_.context);
+    acquired_ = false;
 }
 
 Spi3DisplayHandoffGuard::Spi3DisplayHandoffGuard(Spi3DisplayHandoff& handoff)
-    : handoff_(&handoff), acquired_(handoff.acquire()) {}
+    : handoff_(&handoff) {
+    bool release_required = false;
+    acquired_ = handoff.acquire(release_required);
+    if (!acquired_ && !release_required) {
+        handoff_ = nullptr;
+    }
+}
 
 Spi3DisplayHandoffGuard::~Spi3DisplayHandoffGuard() {
     release();
@@ -111,7 +131,9 @@ Spi3DisplayHandoffGuard::Spi3DisplayHandoffGuard(Spi3DisplayHandoffGuard&& other
 
 Spi3DisplayHandoffGuard& Spi3DisplayHandoffGuard::operator=(Spi3DisplayHandoffGuard&& other) noexcept {
     if (this != &other) {
-        release();
+        if (!release()) {
+            return *this;
+        }
         handoff_ = other.handoff_;
         acquired_ = other.acquired_;
         other.handoff_ = nullptr;
@@ -126,11 +148,13 @@ bool Spi3DisplayHandoffGuard::acquired() const noexcept {
 
 bool Spi3DisplayHandoffGuard::release() noexcept {
     bool result = true;
-    if (acquired_ && handoff_ != nullptr) {
+    if (handoff_ != nullptr && handoff_->is_acquired()) {
         result = handoff_->release();
     }
-    acquired_ = false;
-    handoff_ = nullptr;
+    if (result) {
+        acquired_ = false;
+        handoff_ = nullptr;
+    }
     return result;
 }
 

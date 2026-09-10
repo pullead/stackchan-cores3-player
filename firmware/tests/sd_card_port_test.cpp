@@ -35,6 +35,7 @@ struct FakeBrowseContext {
     bool mount_succeeds = true;
     bool list_succeeds = true;
     bool unmount_succeeds = true;
+    int cs_failures_remaining = 0;
 };
 
 void lock_display(void* raw_context) {
@@ -56,8 +57,14 @@ bool set_shared_pin_input(void* raw_context, std::string&) {
     return true;
 }
 
-bool set_sd_cs_high(void* raw_context, std::string&) {
-    static_cast<FakeBrowseContext*>(raw_context)->events.emplace_back("cs_high");
+bool set_sd_cs_high(void* raw_context, std::string& error) {
+    auto& context = *static_cast<FakeBrowseContext*>(raw_context);
+    context.events.emplace_back("cs_high");
+    if (context.cs_failures_remaining > 0) {
+        --context.cs_failures_remaining;
+        error = "chip select rejected";
+        return false;
+    }
     return true;
 }
 
@@ -146,21 +153,63 @@ bool test_handoff_failure_never_touches_sd() {
                  "failed handoff performs no SD operation");
 }
 
-bool test_list_failure_still_unmounts_and_preserves_all_errors() {
+bool test_mount_failure_releases_without_listing_or_unmounting() {
+    FakeBrowseContext context;
+    context.mount_succeeds = false;
+    auto handoff = make_handoff(context);
+    media::SdCardPort port(handoff, make_sd_operations(context));
+
+    const auto tracks = port.browse_tracks();
+
+    return check(tracks.empty(), "failed mount returns no tracks") &&
+           check(port.last_error() == "mount rejected", "mount error is preserved") &&
+           check(events_equal(context.events, {"lock", "drain", "input", "mount", "cs_high", "unlock"}),
+                 "mount failure deselects SD and unlocks without list or unmount");
+}
+
+bool test_list_failure_still_unmounts_and_releases() {
     FakeBrowseContext context;
     context.list_succeeds = false;
-    context.unmount_succeeds = false;
     auto handoff = make_handoff(context);
     media::SdCardPort port(handoff, make_sd_operations(context));
 
     const auto tracks = port.browse_tracks();
 
     return check(tracks.empty(), "failed directory read returns no partial tracks") &&
-           check(port.last_error() == "directory read rejected; unmount rejected",
-                 "list and unmount errors are both preserved") &&
+           check(port.last_error() == "directory read rejected", "directory read error is preserved") &&
            check(events_equal(context.events,
                               {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "unlock"}),
                  "list error still unmounts before releasing display");
+}
+
+bool test_unmount_failure_clears_tracks_and_releases() {
+    FakeBrowseContext context;
+    context.unmount_succeeds = false;
+    auto handoff = make_handoff(context);
+    media::SdCardPort port(handoff, make_sd_operations(context));
+
+    const auto tracks = port.browse_tracks();
+
+    return check(tracks.empty(), "failed unmount discards listed tracks") &&
+           check(port.last_error() == "unmount rejected", "unmount error is preserved") &&
+           check(events_equal(context.events,
+                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "unlock"}),
+                 "unmount failure still deselects SD before unlocking display");
+}
+
+bool test_release_failure_discards_tracks_and_guard_retries_before_unlock() {
+    FakeBrowseContext context;
+    context.cs_failures_remaining = 1;
+    auto handoff = make_handoff(context);
+    media::SdCardPort port(handoff, make_sd_operations(context));
+
+    const auto tracks = port.browse_tracks();
+
+    return check(tracks.empty(), "failed release discards listed tracks") &&
+           check(port.last_error() == "chip select rejected", "release error is preserved") &&
+           check(events_equal(context.events,
+                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "cs_high", "unlock"}),
+                 "guard retries deselect and only then unlocks display");
 }
 
 bool test_default_host_port_reports_hardware_only() {
@@ -179,7 +228,10 @@ int main() {
     failures += !test_rejects_non_track_names();
     failures += !test_browse_is_one_atomic_handoff_transaction();
     failures += !test_handoff_failure_never_touches_sd();
-    failures += !test_list_failure_still_unmounts_and_preserves_all_errors();
+    failures += !test_mount_failure_releases_without_listing_or_unmounting();
+    failures += !test_list_failure_still_unmounts_and_releases();
+    failures += !test_unmount_failure_clears_tracks_and_releases();
+    failures += !test_release_failure_discards_tracks_and_guard_retries_before_unlock();
     failures += !test_default_host_port_reports_hardware_only();
     return failures == 0 ? 0 : 1;
 }
