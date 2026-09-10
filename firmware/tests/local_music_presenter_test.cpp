@@ -21,6 +21,13 @@ bool test_reports_sd_error_without_rows() {
            check(view.rows.empty(), "error state has no stale rows");
 }
 
+bool test_explains_fat_mount_failure() {
+    const auto view = local_music::make_browse_view({}, "ESP_FAIL");
+    return check(view.heading == "SD CARD ERROR", "mount error heading remains explicit") &&
+           check(view.detail == "FAT32 CARD REQUIRED / CHECK FILESYSTEM", "generic mount error is actionable") &&
+           check(view.rows.empty(), "mount error has no stale rows");
+}
+
 bool test_reports_empty_card() {
     const auto view = local_music::make_browse_view({}, "");
     return check(view.heading == "NO WAV FILES", "empty state is explicit") &&
@@ -57,6 +64,7 @@ bool test_reports_all_visible_tracks() {
 int main() {
     int failures = 0;
     failures += !test_reports_sd_error_without_rows();
+    failures += !test_explains_fat_mount_failure();
     failures += !test_reports_empty_card();
     failures += !test_limits_rows_and_preserves_total_count();
     failures += !test_reports_all_visible_tracks();

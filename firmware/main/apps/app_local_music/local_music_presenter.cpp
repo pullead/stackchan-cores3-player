@@ -9,7 +9,7 @@ BrowseView make_browse_view(const std::vector<media::SdTrack>& tracks, const std
 
     if (!error.empty()) {
         view.heading = "SD CARD ERROR";
-        view.detail = error;
+        view.detail = error == "ESP_FAIL" ? "FAT32 CARD REQUIRED / CHECK FILESYSTEM" : error;
         return view;
     }
 
