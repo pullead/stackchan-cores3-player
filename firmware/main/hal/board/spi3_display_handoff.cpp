@@ -7,6 +7,7 @@
 #include "esp_err.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_log.h"
+#include "esp_rom_gpio.h"
 #include "hal/board/hal_bridge.h"
 #include "soc/gpio_reg.h"
 #include "soc/gpio_sig_map.h"
@@ -242,8 +243,10 @@ bool drain_display(void* raw_context, std::string& error) {
 bool set_shared_pin_input(void*, std::string& error) {
     // CoreS3 shares GPIO35 between LCD D/C and SPI3 MISO.  Direction alone is
     // insufficient: the GPIO output matrix must be returned to SPI3 Q while SD
-    // traffic owns the bus, then the output driver must be disabled. This board
-    // uses SPI3_HOST, whose MISO signal is SPI3_Q (not FSPIQ).
+    // traffic owns the bus, then the output driver must be disabled. Rebind the
+    // input matrix too: panel setup can leave GPIO35 routed only as LCD D/C.
+    // This board uses SPI3_HOST, whose MISO signal is SPI3_Q (not FSPIQ).
+    esp_rom_gpio_connect_in_signal(GPIO_NUM_35, SPI3_Q_IN_IDX, false);
     REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SPI3_Q_OUT_IDX);
     REG_WRITE(GPIO_ENABLE1_W1TC_REG, 1u << (GPIO_NUM_35 & 31));
     const esp_err_t result = gpio_set_direction(GPIO_NUM_35, GPIO_MODE_INPUT);
