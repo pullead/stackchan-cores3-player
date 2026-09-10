@@ -49,7 +49,19 @@ bool test_rejects_invalid_mbr_signature() {
     std::array<uint8_t, 512> mbr{};
     std::array<uint8_t, 512> boot{};
     const auto info = media::describe_raw_card(mbr, boot);
-    return check(info == "MBR SIGNATURE INVALID", "invalid MBR is reported");
+    return check(info.find("MBR SIGNATURE INVALID bytes=") == 0, "invalid MBR is reported");
+}
+
+bool test_shows_sample_when_mbr_signature_is_invalid() {
+    std::array<uint8_t, 512> mbr{};
+    std::array<uint8_t, 512> boot{};
+    mbr[0] = 0xff;
+    mbr[1] = 0x00;
+    mbr[2] = 0x12;
+    mbr[3] = 0x34;
+    const auto info = media::describe_raw_card(mbr, boot);
+    return check(info == "MBR SIGNATURE INVALID bytes=ff001234000000000000000000000000",
+                 "invalid MBR includes a read-only byte sample");
 }
 
 }  // namespace
@@ -59,5 +71,6 @@ int main() {
     failures += !test_describes_fat32_partition();
     failures += !test_describes_exfat_partition();
     failures += !test_rejects_invalid_mbr_signature();
+    failures += !test_shows_sample_when_mbr_signature_is_invalid();
     return failures == 0 ? 0 : 1;
 }

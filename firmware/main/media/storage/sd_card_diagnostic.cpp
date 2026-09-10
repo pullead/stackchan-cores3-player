@@ -22,6 +22,15 @@ bool has_ascii(const SdSector& sector, std::size_t offset, const char* text, std
     return true;
 }
 
+std::string byte_sample(const SdSector& sector, std::size_t count) {
+    std::ostringstream output;
+    output << std::hex << std::setfill('0');
+    for (std::size_t index = 0; index < count; ++index) {
+        output << std::setw(2) << static_cast<unsigned int>(sector[index]);
+    }
+    return output.str();
+}
+
 const char* filesystem_name(const SdSector& boot_sector, uint8_t partition_type) {
     if (has_ascii(boot_sector, 3, "EXFAT   ", 8)) {
         return "EXFAT";
@@ -42,7 +51,7 @@ const char* filesystem_name(const SdSector& boot_sector, uint8_t partition_type)
 
 std::string describe_raw_card(const SdSector& mbr, const SdSector& boot_sector) {
     if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
-        return "MBR SIGNATURE INVALID";
+        return "MBR SIGNATURE INVALID bytes=" + byte_sample(mbr, 16);
     }
 
     constexpr std::size_t kFirstPartition = 446;
