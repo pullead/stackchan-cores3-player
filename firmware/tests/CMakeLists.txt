@@ -85,6 +85,8 @@ add_test(NAME local_playback_controller_test COMMAND $<TARGET_FILE:local_playbac
 
 add_executable(sd_card_port_test
     sd_card_port_test.cpp
+    ../main/media/storage/sd_card_port.cpp
+    ../main/hal/board/spi3_display_handoff.cpp
 )
 
 target_include_directories(sd_card_port_test PRIVATE
@@ -94,3 +96,16 @@ target_include_directories(sd_card_port_test PRIVATE
 target_compile_features(sd_card_port_test PRIVATE cxx_std_17)
 
 add_test(NAME sd_card_port_test COMMAND $<TARGET_FILE:sd_card_port_test>)
+
+add_executable(spi3_display_handoff_test
+    spi3_display_handoff_test.cpp
+    ../main/hal/board/spi3_display_handoff.cpp
+)
+
+target_include_directories(spi3_display_handoff_test PRIVATE
+    ../main
+)
+
+target_compile_features(spi3_display_handoff_test PRIVATE cxx_std_17)
+
+add_test(NAME spi3_display_handoff_test COMMAND $<TARGET_FILE:spi3_display_handoff_test>)

@@ -1,7 +1,97 @@
 #include "media/storage/sd_card_port.h"
 
+#include "hal/board/spi3_display_handoff.h"
+
+namespace media {
+
+SdCardPort::SdCardPort()
+#ifdef ESP_PLATFORM
+    : handoff_(&board::get_spi3_display_handoff()),
+      operations_{this, mount_hardware, list_hardware_tracks, unmount_hardware}
+#endif
+{}
+
+SdCardPort::SdCardPort(board::Spi3DisplayHandoff& handoff, SdCardOperations operations) noexcept
+    : handoff_(&handoff), operations_(operations) {}
+
+std::vector<SdTrack> SdCardPort::browse_tracks() {
+    std::vector<SdTrack> tracks;
+    last_error_.clear();
+
+#ifndef ESP_PLATFORM
+    if (handoff_ == nullptr) {
+        last_error_ = "SD card is only available on ESP hardware";
+        return tracks;
+    }
+#endif
+
+    if (handoff_ == nullptr || !operations_ready()) {
+        last_error_ = "SD card browse port is not initialized";
+        return tracks;
+    }
+
+    board::Spi3DisplayHandoffGuard handoff_guard(*handoff_);
+    if (!handoff_guard.acquired()) {
+        last_error_ = handoff_->last_error();
+        return tracks;
+    }
+
+    std::string operation_error;
+    if (!operations_.mount(operations_.context, operation_error)) {
+        append_error(operation_error.empty() ? "SD mount failed" : operation_error);
+        if (!handoff_guard.release()) {
+            append_error(handoff_->last_error());
+        }
+        return tracks;
+    }
+
+    operation_error.clear();
+    const bool listed = operations_.list_tracks(operations_.context, tracks, operation_error);
+    if (!listed) {
+        append_error(operation_error.empty() ? "SD directory read failed" : operation_error);
+    }
+
+    operation_error.clear();
+    const bool unmounted = operations_.unmount(operations_.context, operation_error);
+    if (!unmounted) {
+        append_error(operation_error.empty() ? "SD unmount failed" : operation_error);
+    }
+
+    const bool released = handoff_guard.release();
+    if (!released) {
+        append_error(handoff_->last_error());
+    }
+
+    if (!listed || !unmounted || !released) {
+        tracks.clear();
+    }
+    return tracks;
+}
+
+const std::string& SdCardPort::last_error() const noexcept {
+    return last_error_;
+}
+
+bool SdCardPort::operations_ready() const noexcept {
+    return operations_.mount != nullptr && operations_.list_tracks != nullptr && operations_.unmount != nullptr;
+}
+
+void SdCardPort::append_error(std::string_view error) {
+    if (error.empty()) {
+        return;
+    }
+    if (!last_error_.empty()) {
+        last_error_ += "; ";
+    }
+    last_error_.append(error.data(), error.size());
+}
+
+}  // namespace media
+
 #ifdef ESP_PLATFORM
 
+#include <cerrno>
+#include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -25,13 +115,12 @@ std::string title_from_filename(std::string_view filename) {
 
 }  // namespace
 
-SdCardPort::~SdCardPort() {
-    unmount();
-}
-
-bool SdCardPort::mount() {
-    unmount();
-    last_error_.clear();
+bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
+    auto& port = *static_cast<SdCardPort*>(raw_context);
+    if (port.card_ != nullptr) {
+        error = "SD card is already mounted";
+        return false;
+    }
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI3_HOST;
@@ -46,49 +135,55 @@ bool SdCardPort::mount() {
     sdmmc_card_t* card = nullptr;
     const esp_err_t result = esp_vfs_fat_sdspi_mount(kMountPath, &host, &slot_config, &mount_config, &card);
     if (result != ESP_OK) {
-        last_error_ = esp_err_to_name(result);
-        ESP_LOGW(kTag, "TF browse-only mount failed: %s", last_error_.c_str());
+        error = esp_err_to_name(result);
+        ESP_LOGW(kTag, "TF browse-only mount failed: %s", error.c_str());
         return false;
     }
 
-    card_ = card;
-    ESP_LOGI(kTag, "TF browse-only mount ready; sharing SPI3 with the display");
+    port.card_ = card;
+    ESP_LOGI(kTag, "TF browse-only mount ready inside display handoff");
     return true;
 }
 
-void SdCardPort::unmount() {
-    if (card_ == nullptr) {
-        return;
+bool SdCardPort::unmount_hardware(void* raw_context, std::string& error) {
+    auto& port = *static_cast<SdCardPort*>(raw_context);
+    if (port.card_ == nullptr) {
+        error = "SD card is not mounted";
+        return false;
     }
 
-    const esp_err_t result = esp_vfs_fat_sdcard_unmount(kMountPath, static_cast<sdmmc_card_t*>(card_));
+    const esp_err_t result = esp_vfs_fat_sdcard_unmount(kMountPath, static_cast<sdmmc_card_t*>(port.card_));
+    port.card_ = nullptr;
     if (result != ESP_OK) {
-        last_error_ = esp_err_to_name(result);
-        ESP_LOGW(kTag, "TF unmount failed: %s", last_error_.c_str());
+        error = esp_err_to_name(result);
+        ESP_LOGW(kTag, "TF unmount failed: %s", error.c_str());
+        return false;
     }
-    card_ = nullptr;
+    return true;
 }
 
-bool SdCardPort::is_mounted() const noexcept {
-    return card_ != nullptr;
-}
-
-std::vector<SdTrack> SdCardPort::list_tracks() {
-    std::vector<SdTrack> tracks;
-    if (!is_mounted()) {
-        last_error_ = "SD card is not mounted";
-        return tracks;
+bool SdCardPort::list_hardware_tracks(void* raw_context, std::vector<SdTrack>& tracks, std::string& error) {
+    auto& port = *static_cast<SdCardPort*>(raw_context);
+    if (port.card_ == nullptr) {
+        error = "SD card is not mounted";
+        return false;
     }
 
     DIR* directory = opendir(kMountPath);
     if (directory == nullptr) {
-        last_error_ = "cannot open SD card root";
-        return tracks;
+        error = std::string("cannot open SD card root: ") + std::strerror(errno);
+        return false;
     }
 
+    bool success = true;
     while (tracks.size() < kMaxTracks) {
+        errno = 0;
         dirent* entry = readdir(directory);
         if (entry == nullptr) {
+            if (errno != 0) {
+                error = std::string("cannot read SD card root: ") + std::strerror(errno);
+                success = false;
+            }
             break;
         }
         const std::string_view filename(entry->d_name);
@@ -103,41 +198,16 @@ std::vector<SdTrack> SdCardPort::list_tracks() {
         }
         tracks.push_back({path, title_from_filename(filename), static_cast<uint64_t>(status.st_size)});
     }
-    closedir(directory);
-    last_error_.clear();
-    return tracks;
-}
 
-const std::string& SdCardPort::last_error() const noexcept {
-    return last_error_;
-}
-
-}  // namespace media
-
-#else
-
-namespace media {
-
-SdCardPort::~SdCardPort() = default;
-
-bool SdCardPort::mount() {
-    last_error_ = "SD card is only available on ESP hardware";
-    return false;
-}
-
-void SdCardPort::unmount() {}
-
-bool SdCardPort::is_mounted() const noexcept {
-    return false;
-}
-
-std::vector<SdTrack> SdCardPort::list_tracks() {
-    last_error_ = "SD card is only available on ESP hardware";
-    return {};
-}
-
-const std::string& SdCardPort::last_error() const noexcept {
-    return last_error_;
+    if (closedir(directory) != 0) {
+        const std::string close_error = std::string("cannot close SD card root: ") + std::strerror(errno);
+        if (!error.empty()) {
+            error += "; ";
+        }
+        error += close_error;
+        success = false;
+    }
+    return success;
 }
 
 }  // namespace media

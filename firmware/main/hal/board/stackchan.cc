@@ -8,6 +8,7 @@
 #include "i2c_device.h"
 #include "axp2101.h"
 #include "settings.h"
+#include "spi3_display_handoff.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -503,6 +504,7 @@ private:
         io_config.lcd_cmd_bits                  = 8;
         io_config.lcd_param_bits                = 8;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &panel_io));
+        ESP_ERROR_CHECK(board::initialize_spi3_display_handoff(panel_io) ? ESP_OK : ESP_FAIL);
 
         ESP_LOGD(TAG, "Install LCD driver");
         esp_lcd_panel_dev_config_t panel_config = {};
