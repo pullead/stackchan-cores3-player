@@ -8,6 +8,9 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_log.h"
 #include "hal/board/hal_bridge.h"
+#include "soc/gpio_reg.h"
+#include "soc/gpio_sig_map.h"
+#include "soc/soc.h"
 #endif
 
 namespace board {
@@ -100,6 +103,11 @@ bool Spi3DisplayHandoff::release() noexcept {
         return false;
     }
 
+    if (!operations_.restore_shared_pin_display_output(operations_.context, release_error)) {
+        last_error_ = release_error.empty() ? "failed to restore the shared display pin" : std::move(release_error);
+        return false;
+    }
+
     operations_.unlock_display(operations_.context);
     acquired_ = false;
     last_error_.clear();
@@ -119,7 +127,7 @@ std::string Spi3DisplayHandoff::last_error() const {
 bool Spi3DisplayHandoff::is_configured_locked() const noexcept {
     return operations_.lock_display != nullptr && operations_.drain_display != nullptr &&
            operations_.set_shared_pin_input != nullptr && operations_.set_sd_chip_select_high != nullptr &&
-           operations_.unlock_display != nullptr;
+           operations_.restore_shared_pin_display_output != nullptr && operations_.unlock_display != nullptr;
 }
 
 void Spi3DisplayHandoff::fail_and_unlock_locked(bool leave_sd_deselected,
@@ -131,6 +139,13 @@ void Spi3DisplayHandoff::fail_and_unlock_locked(bool leave_sd_deselected,
                 last_error_ += "; ";
             }
             last_error_ += release_error.empty() ? "failed to deselect the SD card" : release_error;
+            return;
+        }
+        if (!operations.restore_shared_pin_display_output(operations.context, release_error)) {
+            if (!last_error_.empty()) {
+                last_error_ += "; ";
+            }
+            last_error_ += release_error.empty() ? "failed to restore the shared display pin" : release_error;
             return;
         }
     }
@@ -225,9 +240,14 @@ bool drain_display(void* raw_context, std::string& error) {
 }
 
 bool set_shared_pin_input(void*, std::string& error) {
+    // CoreS3 shares GPIO35 between LCD D/C and SPI3 MISO.  Direction alone is
+    // insufficient: the GPIO output matrix must be returned to FSPIQ while SD
+    // traffic owns the bus, then the output driver must be disabled (M5GFX convention).
+    REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, FSPIQ_OUT_IDX);
+    REG_WRITE(GPIO_ENABLE1_W1TC_REG, 1u << (GPIO_NUM_35 & 31));
     const esp_err_t result = gpio_set_direction(GPIO_NUM_35, GPIO_MODE_INPUT);
     if (result != ESP_OK) {
-        error = std::string("GPIO35 input handoff failed: ") + esp_err_to_name(result);
+        error = std::string("GPIO35 SD MISO handoff failed: ") + esp_err_to_name(result);
         return false;
     }
     return true;
@@ -246,6 +266,19 @@ bool set_sd_chip_select_high(void*, std::string& error) {
     return true;
 }
 
+bool restore_shared_pin_display_output(void*, std::string& error) {
+    // Restore the screen's D/C GPIO route before the LVGL lock is released.
+    REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SIG_GPIO_OUT_IDX);
+    REG_WRITE(GPIO_ENABLE1_W1TS_REG, 1u << (GPIO_NUM_35 & 31));
+    const esp_err_t result = gpio_set_direction(GPIO_NUM_35, GPIO_MODE_OUTPUT);
+    if (result != ESP_OK) {
+        error = std::string("GPIO35 display D/C restore failed: ") + esp_err_to_name(result);
+        ESP_LOGE(kTag, "%s; display remains locked to prevent SPI3 contention", error.c_str());
+        return false;
+    }
+    return true;
+}
+
 void unlock_display(void*) {
     hal_bridge::disply_lvgl_unlock();
 }
@@ -256,7 +289,8 @@ bool initialize_spi3_display_handoff(esp_lcd_panel_io_handle_t panel_io) {
     static EspSpi3DisplayHandoffContext context;
     context.panel_io = panel_io;
     return get_spi3_display_handoff().configure(
-        {&context, lock_display, drain_display, set_shared_pin_input, set_sd_chip_select_high, unlock_display});
+        {&context, lock_display, drain_display, set_shared_pin_input, set_sd_chip_select_high,
+         restore_shared_pin_display_output, unlock_display});
 }
 #endif
 

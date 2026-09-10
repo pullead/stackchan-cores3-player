@@ -69,6 +69,11 @@ bool set_sd_cs_high(void* raw_context, std::string& error) {
     return true;
 }
 
+bool restore_shared_pin_display_output(void* raw_context, std::string&) {
+    static_cast<FakeBrowseContext*>(raw_context)->events.emplace_back("restore_output");
+    return true;
+}
+
 void unlock_display(void* raw_context) {
     static_cast<FakeBrowseContext*>(raw_context)->events.emplace_back("unlock");
 }
@@ -119,7 +124,7 @@ bool events_equal(const std::vector<std::string>& actual, std::initializer_list<
 
 board::Spi3DisplayHandoff make_handoff(FakeBrowseContext& context) {
     return board::Spi3DisplayHandoff({&context, lock_display, drain_display, set_shared_pin_input,
-                                      set_sd_cs_high, unlock_display});
+                                      set_sd_cs_high, restore_shared_pin_display_output, unlock_display});
 }
 
 media::SdCardOperations make_sd_operations(FakeBrowseContext& context) {
@@ -136,7 +141,7 @@ bool test_browse_is_one_atomic_handoff_transaction() {
     return check(tracks.size() == 1, "browse returns the listed track") &&
            check(port.last_error().empty(), "successful browse clears the error") &&
            check(events_equal(context.events,
-                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "unlock"}),
+                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "restore_output", "unlock"}),
                  "mount, list, and unmount stay inside one handoff");
 }
 
@@ -164,7 +169,7 @@ bool test_mount_failure_releases_without_listing_or_unmounting() {
 
     return check(tracks.empty(), "failed mount returns no tracks") &&
            check(port.last_error() == "mount rejected", "mount error is preserved") &&
-           check(events_equal(context.events, {"lock", "drain", "input", "mount", "cs_high", "unlock"}),
+           check(events_equal(context.events, {"lock", "drain", "input", "mount", "cs_high", "restore_output", "unlock"}),
                  "mount failure deselects SD and unlocks without list or unmount");
 }
 
@@ -179,7 +184,7 @@ bool test_list_failure_still_unmounts_and_releases() {
     return check(tracks.empty(), "failed directory read returns no partial tracks") &&
            check(port.last_error() == "directory read rejected", "directory read error is preserved") &&
            check(events_equal(context.events,
-                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "unlock"}),
+                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "restore_output", "unlock"}),
                  "list error still unmounts before releasing display");
 }
 
@@ -194,7 +199,7 @@ bool test_unmount_failure_clears_tracks_and_releases() {
     return check(tracks.empty(), "failed unmount discards listed tracks") &&
            check(port.last_error() == "unmount rejected", "unmount error is preserved") &&
            check(events_equal(context.events,
-                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "unlock"}),
+                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "restore_output", "unlock"}),
                  "unmount failure still deselects SD before unlocking display");
 }
 
@@ -209,7 +214,7 @@ bool test_release_failure_discards_tracks_and_guard_retries_before_unlock() {
     return check(tracks.empty(), "failed release discards listed tracks") &&
            check(port.last_error() == "chip select rejected", "release error is preserved") &&
            check(events_equal(context.events,
-                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "cs_high", "unlock"}),
+                              {"lock", "drain", "input", "mount", "list", "unmount", "cs_high", "cs_high", "restore_output", "unlock"}),
                  "guard retries deselect and only then unlocks display");
 }
 

@@ -16,6 +16,7 @@ struct Spi3DisplayHandoffOperations {
     bool (*drain_display)(void* context, std::string& error) = nullptr;
     bool (*set_shared_pin_input)(void* context, std::string& error) = nullptr;
     bool (*set_sd_chip_select_high)(void* context, std::string& error) = nullptr;
+    bool (*restore_shared_pin_display_output)(void* context, std::string& error) = nullptr;
     void (*unlock_display)(void* context) = nullptr;
 };
 
