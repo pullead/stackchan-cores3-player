@@ -50,6 +50,7 @@ public:
     virtual void ShowNotification(const char* notification, int duration_ms = 3000) override;
 
     void LvglLock();
+    bool TryLvglLock(int timeout_ms);
     void LvglUnlock();
     lv_disp_t* GetLvglDisplay();
 };

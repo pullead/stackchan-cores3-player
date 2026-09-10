@@ -38,8 +38,9 @@ struct FakeBrowseContext {
     int cs_failures_remaining = 0;
 };
 
-void lock_display(void* raw_context) {
+bool lock_display(void* raw_context, std::string&) {
     static_cast<FakeBrowseContext*>(raw_context)->events.emplace_back("lock");
+    return true;
 }
 
 bool drain_display(void* raw_context, std::string& error) {

@@ -92,6 +92,16 @@ void disply_lvgl_lock()
     display->LvglLock();
 }
 
+bool try_display_lvgl_lock(int timeout_ms)
+{
+    auto display = static_cast<DISPLAY_TYPE*>(Board::GetInstance().GetDisplay());
+    if (display == nullptr) {
+        ESP_LOGE(_tag, "Cannot lock LVGL before the display is initialized");
+        return false;
+    }
+    return display->TryLvglLock(timeout_ms);
+}
+
 void disply_lvgl_unlock()
 {
     auto display = static_cast<DISPLAY_TYPE*>(Board::GetInstance().GetDisplay());

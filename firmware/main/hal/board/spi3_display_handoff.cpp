@@ -6,7 +6,8 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_lcd_panel_io.h"
-#include "hal/hal.h"
+#include "esp_log.h"
+#include "hal/board/hal_bridge.h"
 #endif
 
 namespace board {
@@ -15,11 +16,13 @@ Spi3DisplayHandoff::Spi3DisplayHandoff(Spi3DisplayHandoffOperations operations) 
     : operations_(operations) {}
 
 bool Spi3DisplayHandoff::configure(Spi3DisplayHandoffOperations operations) noexcept {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     if (acquired_) {
         last_error_ = "cannot configure SPI3 handoff while acquired";
         return false;
     }
     operations_ = operations;
+    ++configuration_generation_;
     last_error_.clear();
     return true;
 }
@@ -31,31 +34,52 @@ bool Spi3DisplayHandoff::acquire() {
 
 bool Spi3DisplayHandoff::acquire(bool& release_required) {
     release_required = false;
-    if (acquired_) {
-        last_error_ = "SPI3 display handoff is already acquired";
+    Spi3DisplayHandoffOperations operations;
+    std::uint64_t configuration_generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!is_configured_locked()) {
+            last_error_ = "SPI3 display handoff is not initialized";
+            return false;
+        }
+        operations = operations_;
+        configuration_generation = configuration_generation_;
+    }
+
+    std::string lock_error;
+    if (!operations.lock_display(operations.context, lock_error)) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        last_error_ = lock_error.empty() ? "failed to lock the display" : std::move(lock_error);
         return false;
     }
-    if (!is_configured()) {
-        last_error_ = "SPI3 display handoff is not initialized";
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (configuration_generation != configuration_generation_) {
+        last_error_ = "SPI3 display handoff configuration changed while locking";
+        operations.unlock_display(operations.context);
+        return false;
+    }
+    if (acquired_) {
+        last_error_ = "SPI3 display handoff is already acquired";
+        operations.unlock_display(operations.context);
         return false;
     }
 
     last_error_.clear();
-    operations_.lock_display(operations_.context);
     acquired_ = true;
 
-    if (!operations_.drain_display(operations_.context, last_error_)) {
+    if (!operations.drain_display(operations.context, last_error_)) {
         if (last_error_.empty()) {
             last_error_ = "failed to drain display transactions";
         }
-        fail_and_unlock(false);
+        fail_and_unlock_locked(false, operations);
         return false;
     }
-    if (!operations_.set_shared_pin_input(operations_.context, last_error_)) {
+    if (!operations.set_shared_pin_input(operations.context, last_error_)) {
         if (last_error_.empty()) {
             last_error_ = "failed to release the shared display pin";
         }
-        fail_and_unlock(true);
+        fail_and_unlock_locked(true, operations);
         release_required = acquired_;
         return false;
     }
@@ -64,6 +88,7 @@ bool Spi3DisplayHandoff::acquire(bool& release_required) {
 }
 
 bool Spi3DisplayHandoff::release() noexcept {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     if (!acquired_) {
         return true;
     }
@@ -81,24 +106,27 @@ bool Spi3DisplayHandoff::release() noexcept {
     return true;
 }
 
-bool Spi3DisplayHandoff::is_acquired() const noexcept {
+bool Spi3DisplayHandoff::is_acquired() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     return acquired_;
 }
 
-const std::string& Spi3DisplayHandoff::last_error() const noexcept {
+std::string Spi3DisplayHandoff::last_error() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     return last_error_;
 }
 
-bool Spi3DisplayHandoff::is_configured() const noexcept {
+bool Spi3DisplayHandoff::is_configured_locked() const noexcept {
     return operations_.lock_display != nullptr && operations_.drain_display != nullptr &&
            operations_.set_shared_pin_input != nullptr && operations_.set_sd_chip_select_high != nullptr &&
            operations_.unlock_display != nullptr;
 }
 
-void Spi3DisplayHandoff::fail_and_unlock(bool leave_sd_deselected) {
+void Spi3DisplayHandoff::fail_and_unlock_locked(bool leave_sd_deselected,
+                                                const Spi3DisplayHandoffOperations& operations) {
     if (leave_sd_deselected) {
         std::string release_error;
-        if (!operations_.set_sd_chip_select_high(operations_.context, release_error)) {
+        if (!operations.set_sd_chip_select_high(operations.context, release_error)) {
             if (!last_error_.empty()) {
                 last_error_ += "; ";
             }
@@ -106,7 +134,7 @@ void Spi3DisplayHandoff::fail_and_unlock(bool leave_sd_deselected) {
             return;
         }
     }
-    operations_.unlock_display(operations_.context);
+    operations.unlock_display(operations.context);
     acquired_ = false;
 }
 
@@ -148,7 +176,7 @@ bool Spi3DisplayHandoffGuard::acquired() const noexcept {
 
 bool Spi3DisplayHandoffGuard::release() noexcept {
     bool result = true;
-    if (handoff_ != nullptr && handoff_->is_acquired()) {
+    if (handoff_ != nullptr) {
         result = handoff_->release();
     }
     if (result) {
@@ -166,12 +194,20 @@ Spi3DisplayHandoff& get_spi3_display_handoff() {
 #ifdef ESP_PLATFORM
 namespace {
 
+constexpr char kTag[] = "Spi3DisplayHandoff";
+constexpr int kDisplayLockTimeoutMs = 30000;
+
 struct EspSpi3DisplayHandoffContext {
     esp_lcd_panel_io_handle_t panel_io = nullptr;
 };
 
-void lock_display(void*) {
-    GetHAL().lvglLock();
+bool lock_display(void*, std::string& error) {
+    if (!hal_bridge::try_display_lvgl_lock(kDisplayLockTimeoutMs)) {
+        error = "LVGL display lock timed out after 30000 ms";
+        ESP_LOGE(kTag, "%s", error.c_str());
+        return false;
+    }
+    return true;
 }
 
 bool drain_display(void* raw_context, std::string& error) {
@@ -204,13 +240,14 @@ bool set_sd_chip_select_high(void*, std::string& error) {
     }
     if (result != ESP_OK) {
         error = std::string("SD chip-select restore failed: ") + esp_err_to_name(result);
+        ESP_LOGE(kTag, "%s; display remains locked to prevent SPI3 contention", error.c_str());
         return false;
     }
     return true;
 }
 
 void unlock_display(void*) {
-    GetHAL().lvglUnlock();
+    hal_bridge::disply_lvgl_unlock();
 }
 
 }  // namespace

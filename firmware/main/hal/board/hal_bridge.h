@@ -42,6 +42,7 @@ void set_xiaozhi_mode(bool mode);
 void toggle_xiaozhi_chat_state();
 
 void disply_lvgl_lock();
+bool try_display_lvgl_lock(int timeout_ms);
 void disply_lvgl_unlock();
 lv_disp_t* display_get_lvgl_display();
 

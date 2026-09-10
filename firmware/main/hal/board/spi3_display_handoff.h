@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <mutex>
 #include <string>
 
 #ifdef ESP_PLATFORM
@@ -10,7 +12,7 @@ namespace board {
 
 struct Spi3DisplayHandoffOperations {
     void* context = nullptr;
-    void (*lock_display)(void* context) = nullptr;
+    bool (*lock_display)(void* context, std::string& error) = nullptr;
     bool (*drain_display)(void* context, std::string& error) = nullptr;
     bool (*set_shared_pin_input)(void* context, std::string& error) = nullptr;
     bool (*set_sd_chip_select_high)(void* context, std::string& error) = nullptr;
@@ -28,17 +30,19 @@ public:
     bool configure(Spi3DisplayHandoffOperations operations) noexcept;
     bool acquire();
     bool release() noexcept;
-    bool is_acquired() const noexcept;
-    const std::string& last_error() const noexcept;
+    bool is_acquired() const;
+    std::string last_error() const;
 
 private:
     friend class Spi3DisplayHandoffGuard;
 
     bool acquire(bool& release_required);
-    bool is_configured() const noexcept;
-    void fail_and_unlock(bool leave_sd_deselected);
+    bool is_configured_locked() const noexcept;
+    void fail_and_unlock_locked(bool leave_sd_deselected, const Spi3DisplayHandoffOperations& operations);
 
+    mutable std::mutex state_mutex_;
     Spi3DisplayHandoffOperations operations_;
+    std::uint64_t configuration_generation_ = 0;
     bool acquired_ = false;
     std::string last_error_;
 };

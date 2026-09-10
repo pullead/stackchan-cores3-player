@@ -1,7 +1,11 @@
 #include "hal/board/spi3_display_handoff.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -10,6 +14,7 @@ namespace {
 
 struct FakeBackend {
     std::vector<std::string> events;
+    bool lock_succeeds = true;
     bool drain_succeeds = true;
     bool input_succeeds = true;
     bool cs_succeeds = true;
@@ -23,8 +28,14 @@ bool check(bool condition, const char* expression) {
     return false;
 }
 
-void lock_display(void* context) {
-    static_cast<FakeBackend*>(context)->events.emplace_back("lock");
+bool lock_display(void* context, std::string& error) {
+    auto& backend = *static_cast<FakeBackend*>(context);
+    backend.events.emplace_back("lock");
+    if (!backend.lock_succeeds) {
+        error = "display lock timed out";
+        return false;
+    }
+    return true;
 }
 
 bool drain_display(void* context, std::string& error) {
@@ -66,6 +77,48 @@ board::Spi3DisplayHandoff make_handoff(FakeBackend& backend) {
                                       set_sd_cs_high, unlock_display});
 }
 
+struct ConcurrentBackend {
+    std::recursive_timed_mutex display_mutex;
+    std::vector<std::string> events;
+};
+
+bool concurrent_lock_display(void* context, std::string& error) {
+    auto& backend = *static_cast<ConcurrentBackend*>(context);
+    backend.events.emplace_back("lock");
+    if (!backend.display_mutex.try_lock_for(std::chrono::milliseconds(100))) {
+        error = "display lock timed out";
+        return false;
+    }
+    return true;
+}
+
+bool concurrent_drain_display(void* context, std::string&) {
+    static_cast<ConcurrentBackend*>(context)->events.emplace_back("drain");
+    return true;
+}
+
+bool concurrent_set_shared_pin_input(void* context, std::string&) {
+    static_cast<ConcurrentBackend*>(context)->events.emplace_back("input");
+    return true;
+}
+
+bool concurrent_set_sd_cs_high(void* context, std::string&) {
+    static_cast<ConcurrentBackend*>(context)->events.emplace_back("cs_high");
+    return true;
+}
+
+void concurrent_unlock_display(void* context) {
+    auto& backend = *static_cast<ConcurrentBackend*>(context);
+    backend.events.emplace_back("unlock");
+    backend.display_mutex.unlock();
+}
+
+board::Spi3DisplayHandoff make_concurrent_handoff(ConcurrentBackend& backend) {
+    return board::Spi3DisplayHandoff({&backend, concurrent_lock_display, concurrent_drain_display,
+                                      concurrent_set_shared_pin_input, concurrent_set_sd_cs_high,
+                                      concurrent_unlock_display});
+}
+
 bool events_equal(const std::vector<std::string>& actual, std::initializer_list<const char*> expected) {
     if (actual.size() != expected.size()) {
         return false;
@@ -90,6 +143,18 @@ bool test_acquire_and_release_order() {
 
     return check(events_equal(backend.events, {"lock", "drain", "input", "cs_high", "unlock"}),
                  "handoff follows safe pin order");
+}
+
+bool test_lock_failure_stops_before_handoff_work() {
+    FakeBackend backend;
+    backend.lock_succeeds = false;
+    auto handoff = make_handoff(backend);
+
+    return check(!handoff.acquire(), "display lock failure rejects acquire") &&
+           check(!handoff.is_acquired(), "display lock failure never marks handoff acquired") &&
+           check(handoff.last_error() == "display lock timed out", "display lock error is preserved") &&
+           check(events_equal(backend.events, {"lock"}),
+                 "display lock failure does not drain, switch pins, or unlock");
 }
 
 bool test_drain_failure_unlocks_without_touching_sd_pin() {
@@ -156,8 +221,8 @@ bool test_guard_releases_exactly_once_after_move() {
 }
 
 bool test_nested_acquire_is_rejected_without_double_release() {
-    FakeBackend backend;
-    auto handoff = make_handoff(backend);
+    ConcurrentBackend backend;
+    auto handoff = make_concurrent_handoff(backend);
 
     {
         board::Spi3DisplayHandoffGuard outer(handoff);
@@ -168,8 +233,53 @@ bool test_nested_acquire_is_rejected_without_double_release() {
         }
     }
 
-    return check(events_equal(backend.events, {"lock", "drain", "input", "cs_high", "unlock"}),
-                 "nested guard does not unlock outer guard");
+    return check(events_equal(backend.events,
+                              {"lock", "drain", "input", "lock", "unlock", "cs_high", "unlock"}),
+                 "nested guard releases only its recursive lock layer before outer release");
+}
+
+bool test_other_thread_times_out_without_entering_handoff_work() {
+    ConcurrentBackend backend;
+    auto handoff = make_concurrent_handoff(backend);
+    bool second_acquired = true;
+    std::string second_error;
+    std::mutex start_mutex;
+    std::condition_variable start_cv;
+    bool second_started = false;
+
+    {
+        board::Spi3DisplayHandoffGuard first(handoff);
+        if (!check(first.acquired(), "first thread acquires handoff before contention")) {
+            return false;
+        }
+
+        std::thread second([&]() {
+            {
+                std::lock_guard<std::mutex> lock(start_mutex);
+                second_started = true;
+            }
+            start_cv.notify_one();
+            second_acquired = handoff.acquire();
+            second_error = handoff.last_error();
+        });
+
+        {
+            std::unique_lock<std::mutex> lock(start_mutex);
+            start_cv.wait(lock, [&]() { return second_started; });
+        }
+        second.join();
+
+        if (!check(!second_acquired, "second thread times out while first owns display lock") ||
+            !check(second_error == "display lock timed out", "second thread sees lock timeout") ||
+            !check(handoff.is_acquired(), "first handoff remains acquired after contention") ||
+            !check(events_equal(backend.events, {"lock", "drain", "input", "lock"}),
+                   "contending thread never drains or switches shared pins")) {
+            return false;
+        }
+    }
+
+    return check(events_equal(backend.events, {"lock", "drain", "input", "lock", "cs_high", "unlock"}),
+                 "first thread releases normally after contending thread times out");
 }
 
 bool test_cs_failure_keeps_display_locked_until_retry_succeeds() {
@@ -248,11 +358,13 @@ static_assert(std::is_nothrow_move_assignable_v<board::Spi3DisplayHandoffGuard>)
 int main() {
     int failures = 0;
     failures += !test_acquire_and_release_order();
+    failures += !test_lock_failure_stops_before_handoff_work();
     failures += !test_drain_failure_unlocks_without_touching_sd_pin();
     failures += !test_input_failure_restores_safe_cs_and_unlocks();
     failures += !test_input_and_cs_failure_keeps_display_locked_until_guard_retry();
     failures += !test_guard_releases_exactly_once_after_move();
     failures += !test_nested_acquire_is_rejected_without_double_release();
+    failures += !test_other_thread_times_out_without_entering_handoff_work();
     failures += !test_cs_failure_keeps_display_locked_until_retry_succeeds();
     failures += !test_persistent_cs_failure_is_fail_closed_on_guard_destruction();
     failures += !test_move_assignment_does_not_abandon_failed_release();

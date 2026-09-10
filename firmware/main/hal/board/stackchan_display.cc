@@ -292,6 +292,11 @@ void StackChanAvatarDisplay::LvglLock()
     }
 }
 
+bool StackChanAvatarDisplay::TryLvglLock(int timeout_ms)
+{
+    return Lock(timeout_ms);
+}
+
 void StackChanAvatarDisplay::LvglUnlock()
 {
     Unlock();

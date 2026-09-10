@@ -32,7 +32,8 @@ std::vector<SdTrack> SdCardPort::browse_tracks() {
 
     board::Spi3DisplayHandoffGuard handoff_guard(*handoff_);
     if (!handoff_guard.acquired()) {
-        last_error_ = handoff_->last_error();
+        const std::string handoff_error = handoff_->last_error();
+        last_error_ = handoff_error;
         return tracks;
     }
 
@@ -40,7 +41,8 @@ std::vector<SdTrack> SdCardPort::browse_tracks() {
     if (!operations_.mount(operations_.context, operation_error)) {
         append_error(operation_error.empty() ? "SD mount failed" : operation_error);
         if (!handoff_guard.release()) {
-            append_error(handoff_->last_error());
+            const std::string release_error = handoff_->last_error();
+            append_error(release_error);
         }
         return tracks;
     }
@@ -59,7 +61,8 @@ std::vector<SdTrack> SdCardPort::browse_tracks() {
 
     const bool released = handoff_guard.release();
     if (!released) {
-        append_error(handoff_->last_error());
+        const std::string release_error = handoff_->last_error();
+        append_error(release_error);
     }
 
     if (!listed || !unmounted || !released) {
