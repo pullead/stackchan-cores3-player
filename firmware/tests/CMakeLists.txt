@@ -109,3 +109,16 @@ target_include_directories(spi3_display_handoff_test PRIVATE
 target_compile_features(spi3_display_handoff_test PRIVATE cxx_std_17)
 
 add_test(NAME spi3_display_handoff_test COMMAND $<TARGET_FILE:spi3_display_handoff_test>)
+
+add_executable(local_music_presenter_test
+    local_music_presenter_test.cpp
+    ../main/apps/app_local_music/local_music_presenter.cpp
+)
+
+target_include_directories(local_music_presenter_test PRIVATE
+    ../main
+)
+
+target_compile_features(local_music_presenter_test PRIVATE cxx_std_17)
+
+add_test(NAME local_music_presenter_test COMMAND $<TARGET_FILE:local_music_presenter_test>)

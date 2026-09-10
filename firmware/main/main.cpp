@@ -38,6 +38,8 @@ extern "C" void app_main(void)
     GetMooncake().installApp(std::make_unique<AppEzdata>());
     GetMooncake().installApp(std::make_unique<AppDance>());
     GetMooncake().installApp(std::make_unique<AppSetup>());
+    // Append new apps so the legacy warm-reboot indices remain stable.
+    GetMooncake().installApp(std::make_unique<AppLocalMusic>());
 
     // Main loop
     while (1) {
