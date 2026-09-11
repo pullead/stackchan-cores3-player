@@ -9,6 +9,7 @@
 #include "axp2101.h"
 #include "settings.h"
 #include "spi3_display_handoff.h"
+#include "aw9523_sd_power.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -200,6 +201,21 @@ public:
         WriteReg(0x11, 0b00010000);  // GCR P0 port is Push-Pull mode.
         WriteReg(0x12, 0b11111111);  // LEDMODE_P0
         WriteReg(0x13, 0b11111111);  // LEDMODE_P1
+    }
+
+    void EnableSdCardPower()
+    {
+        // CoreS3 routes SD power through AW9523 P0_4. The official BSP enables
+        // this pin as an output and drives it high before mounting the card.
+        const uint8_t config = ReadReg(0x04);
+        const uint8_t output = ReadReg(0x02);
+        const uint8_t enabled_config = board::aw9523::sd_enable_config(config);
+        const uint8_t enabled_output = board::aw9523::sd_enable_output(output);
+
+        WriteReg(0x04, enabled_config);
+        WriteReg(0x02, enabled_output);
+        ESP_LOGI(TAG, "SD power enabled via AW9523 P0_4: config=0x%02X output=0x%02X",
+                 enabled_config, enabled_output);
     }
 
     void ResetAw88298()
@@ -435,6 +451,7 @@ private:
     {
         ESP_LOGI(TAG, "Init AW9523");
         aw9523_ = new Aw9523(i2c_bus_, 0x58);
+        aw9523_->EnableSdCardPower();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 

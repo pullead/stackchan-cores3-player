@@ -135,3 +135,15 @@ target_include_directories(sd_card_diagnostic_test PRIVATE
 target_compile_features(sd_card_diagnostic_test PRIVATE cxx_std_17)
 
 add_test(NAME sd_card_diagnostic_test COMMAND $<TARGET_FILE:sd_card_diagnostic_test>)
+
+add_executable(aw9523_sd_power_test
+    aw9523_sd_power_test.cpp
+)
+
+target_include_directories(aw9523_sd_power_test PRIVATE
+    ../main
+)
+
+target_compile_features(aw9523_sd_power_test PRIVATE cxx_std_17)
+
+add_test(NAME aw9523_sd_power_test COMMAND $<TARGET_FILE:aw9523_sd_power_test>)
