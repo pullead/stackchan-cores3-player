@@ -246,14 +246,18 @@ bool set_shared_pin_input(void*, std::string& error) {
     // traffic owns the bus, then the output driver must be disabled. Rebind the
     // input matrix too: panel setup can leave GPIO35 routed only as LCD D/C.
     // This board uses SPI3_HOST, whose MISO signal is SPI3_Q (not FSPIQ).
-    esp_rom_gpio_connect_in_signal(GPIO_NUM_35, SPI3_Q_IN_IDX, false);
-    REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SPI3_Q_OUT_IDX);
     REG_WRITE(GPIO_ENABLE1_W1TC_REG, 1u << (GPIO_NUM_35 & 31));
     const esp_err_t result = gpio_set_direction(GPIO_NUM_35, GPIO_MODE_INPUT);
     if (result != ESP_OK) {
         error = std::string("GPIO35 SD MISO handoff failed: ") + esp_err_to_name(result);
         return false;
     }
+    esp_rom_gpio_connect_in_signal(GPIO_NUM_35, SPI3_Q_IN_IDX, false);
+    REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SPI3_Q_OUT_IDX);
+    ESP_LOGI(kTag, "GPIO35 SD route in=%lu out=%lu enable1=%08lx",
+             static_cast<unsigned long>(REG_READ(GPIO_FUNC35_IN_SEL_CFG_REG)),
+             static_cast<unsigned long>(REG_READ(GPIO_FUNC35_OUT_SEL_CFG_REG) & GPIO_FUNC35_OUT_SEL_M),
+             static_cast<unsigned long>(REG_READ(GPIO_ENABLE1_REG)));
     return true;
 }
 
