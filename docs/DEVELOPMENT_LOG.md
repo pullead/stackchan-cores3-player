@@ -166,6 +166,21 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 相关提交：`4b82fb8`、`eb00930`、`82233f5`、`6061762`、`ebc603b`。
 
 当前阻塞仅剩环境验证：本机 IDF 构建第一次因 `cmake` 不在 PATH 失败，需要重新加载 ESP-IDF 工具环境后运行完整固件编译；编译通过后再进行 COM6 静音刷写和真实 MP3 设备验证。
+
+## 2026-09-14：真实 MP3 backend 编译验证启动
+
+随后修复并确认了压缩音频启动顺序：MP3 解码器在 `open()` 后格式尚未确定，控制器会先完成首帧解码，再根据实际采样率/声道打开 AudioSink；首帧立体声仍会 downmix 为 CoreS3 sink 所需的单声道。对应测试已更新，确认 MP3 启动阶段不会过早打开 sink，首帧成功后才打开。
+
+本轮使用 ESP-IDF 5.5.5 工具链重新配置了独立构建目录 `firmware/build-real-mp3`。配置阶段成功识别：
+
+- 目标：ESP32-S3；
+- `espressif/esp_audio_codec` 2.4.1；
+- `main` 组件和新增 `EspMp3DecoderBackend`；
+- 生成默认资源和分区表。
+
+全量 Ninja 编译已开始，当前记录进度约为 `115/2507`，尚未出现 MP3 backend 或 C++ 源码错误。由于这是全新构建目录，编译会比增量构建耗时更长；完成后仍需检查最终链接、镜像大小、刷写和 COM6 静音启动日志。
+
+本轮新增/修复提交：`eb00930`、`82233f5`、`6061762`、`ebc603b`、`024e022`。本次日志提交不包含用户未提交的 `firmware/dependencies.lock` 修改。
 ## 2026-09-14 — Real ESP32-audioI2S backend gate
 
 本阶段完成了真实解码 backend 的依赖审计边界。最新 `esp32-hifi` 主分支为 `1b9185e`，其 PlatformIO 声明使用未固定的 `ESP32-audioI2S` Git URL。该库的常规 `Audio` API 同时接管 Arduino FS 和 I2S 输出，不能直接塞入 CoreS3 的只读 `SdAudioStream`，否则会绕过 GPIO35/SPI3 显示让渡并产生第二个音频所有者。
