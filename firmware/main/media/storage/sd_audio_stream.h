@@ -38,6 +38,7 @@ public:
     uint64_t size() const noexcept override { return open_ ? size_ : 0; }
     bool is_open() const noexcept override { return open_; }
     AudioStreamStatus close() noexcept override;
+    const std::string& last_error() const noexcept { return last_error_; }
 
 private:
     board::Spi3DisplayHandoff* handoff_;
@@ -49,6 +50,7 @@ private:
     uint64_t position_ = 0;
     bool mounted_ = false;
     bool open_ = false;
+    std::string last_error_;
 };
 
 }  // namespace media

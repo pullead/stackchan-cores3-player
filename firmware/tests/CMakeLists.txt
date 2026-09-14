@@ -168,3 +168,12 @@ target_include_directories(audio_stream_contract_test PRIVATE
 target_compile_features(audio_stream_contract_test PRIVATE cxx_std_17)
 
 add_test(NAME audio_stream_contract_test COMMAND $<TARGET_FILE:audio_stream_contract_test>)
+
+add_executable(sd_audio_stream_test
+    sd_audio_stream_test.cpp
+    ../main/media/storage/sd_audio_stream.cpp
+    ../main/hal/board/spi3_display_handoff.cpp
+)
+target_include_directories(sd_audio_stream_test PRIVATE ../main)
+target_compile_features(sd_audio_stream_test PRIVATE cxx_std_17)
+add_test(NAME sd_audio_stream_test COMMAND $<TARGET_FILE:sd_audio_stream_test>)

@@ -4,6 +4,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <memory>
+#include "media/decoder/audio_stream.h"
 
 namespace board {
 class Spi3DisplayHandoff;
@@ -68,6 +70,7 @@ public:
     SdCardPort& operator=(const SdCardPort&) = delete;
 
     std::vector<SdTrack> browse_tracks();
+    std::unique_ptr<AudioStream> open_track(const SdTrack& track);
     const std::string& last_error() const noexcept;
 
 private:
