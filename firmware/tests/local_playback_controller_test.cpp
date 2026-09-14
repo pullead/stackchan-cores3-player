@@ -80,7 +80,14 @@ public:
         if (decode_error) return media::AudioDecodeStatus::IoError;
         if (invalid_block) { block.frames = block.capacity_frames + 1; return media::AudioDecodeStatus::Ok; }
         if (done) return media::AudioDecodeStatus::Eof;
-        block.samples[0] = 11; block.samples[1] = 22; block.frames = 2; done = true; return media::AudioDecodeStatus::Ok;
+        if (stereo) {
+            block.samples[0] = 10; block.samples[1] = 20;
+            block.samples[2] = 30; block.samples[3] = 50;
+        } else {
+            block.samples[0] = 11; block.samples[1] = 22;
+        }
+        block.frames = 2; done = true;
+        return eof_with_frames ? media::AudioDecodeStatus::Eof : media::AudioDecodeStatus::Ok;
     }
     const media::PcmFormat& format() const noexcept override { return pcm; }
     const media::AudioMetadata& metadata() const noexcept override { return metadata_; }
@@ -91,6 +98,8 @@ public:
     media::AudioDecodeStatus open_result = media::AudioDecodeStatus::Ok;
     bool decode_error = false;
     bool invalid_block = false;
+    bool stereo = false;
+    bool eof_with_frames = false;
     bool opened = false;
     bool done = false;
 };
@@ -362,6 +371,36 @@ bool test_invalid_decoder_block_is_rejected_without_writing() {
            check(!controller.snapshot().error.empty(), "invalid block exposes error");
 }
 
+bool test_stereo_decoder_is_downmixed_to_mono() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    auto* decoder = new FakeDecoder();
+    decoder->stereo = true;
+    decoder->pcm.channels = 2;
+    media::LocalPlaybackController controller(sink);
+    controller.select("stereo.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    if (!check(controller.start(), "stereo fixture starts")) return false;
+    controller.pump();
+    return check(sink.written_pcm[0] == std::vector<int16_t>{15, 40}, "stereo is downmixed") &&
+           check(controller.snapshot().total_frames == 0, "streaming duration remains unknown");
+}
+
+bool test_eof_with_frames_writes_final_pcm_before_cleanup() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    auto* decoder = new FakeDecoder();
+    decoder->eof_with_frames = true;
+    media::LocalPlaybackController controller(sink);
+    controller.select("final.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    if (!check(controller.start(), "EOF-with-frames fixture starts")) return false;
+    controller.pump();
+    return check(sink.written_pcm[0] == std::vector<int16_t>{11, 22}, "EOF frame payload is written") &&
+           check(controller.snapshot().state == media::PlaybackState::Idle, "EOF-with-frames cleans up") &&
+           check(stream->closed, "EOF-with-frames closes stream");
+}
+
 }  // namespace
 
 int main() {
@@ -377,5 +416,7 @@ int main() {
     failures += !test_decoder_error_closes_everything_without_writing();
     failures += !test_decoder_stop_closes_stream_and_sink();
     failures += !test_invalid_decoder_block_is_rejected_without_writing();
+    failures += !test_stereo_decoder_is_downmixed_to_mono();
+    failures += !test_eof_with_frames_writes_final_pcm_before_cleanup();
     return failures == 0 ? 0 : 1;
 }

@@ -59,7 +59,7 @@ bool LocalPlaybackController::start() {
             return false;
         }
         format = decoder_->format();
-        if (!format.valid() || format.channels != 1) {
+        if (!format.valid()) {
             fail("Unsupported decoded PCM format");
             return false;
         }
@@ -93,21 +93,37 @@ void LocalPlaybackController::pump() {
     }
 
     if (pending_pcm_.empty()) {
-        std::array<int16_t, kPlaybackChunkFrames> frames{};
+        std::array<int16_t, kPlaybackChunkFrames * 2> frames{};
         size_t frame_count = 0;
         if (decoder_) {
-            PcmBlock block{frames.data(), frames.size(), 0};
+            const size_t capacity = kPlaybackChunkFrames;
+            PcmBlock block{frames.data(), capacity, 0};
             const AudioDecodeStatus result = decoder_->decode(block);
-            if (result == AudioDecodeStatus::Eof || (result == AudioDecodeStatus::Ok && block.frames == 0)) {
+            if (block.samples != frames.data() || block.capacity_frames != capacity ||
+                !block.valid() || block.frames > capacity) {
+                fail("Audio decoder returned invalid PCM block");
+                return;
+            }
+            if (result == AudioDecodeStatus::Eof && block.frames == 0) {
                 decoder_eof_ = true;
                 stop_pipeline();
                 return;
             }
-            if (result != AudioDecodeStatus::Ok || block.frames > frames.size()) {
+            if ((result != AudioDecodeStatus::Ok &&
+                 !(result == AudioDecodeStatus::Eof && block.frames > 0)) ||
+                block.frames > frames.size()) {
                 fail("Audio decoder failed");
                 return;
             }
             frame_count = block.frames;
+            if (decoder_->format().channels == 2) {
+                for (size_t index = 0; index < frame_count; ++index) {
+                    const int32_t left = frames[index * 2];
+                    const int32_t right = frames[index * 2 + 1];
+                    frames[index] = static_cast<int16_t>((left + right) / 2);
+                }
+            }
+            if (result == AudioDecodeStatus::Eof) decoder_eof_ = true;
         } else {
             frame_count = reader_.read_frames(frames.data(), frames.size());
             if (frame_count == 0) {
@@ -133,7 +149,7 @@ void LocalPlaybackController::pump() {
 
     pending_pcm_.clear();
     pending_offset_ = 0;
-    if (!decoder_ && reader_.remaining_frames() == 0) {
+    if ((!decoder_ && reader_.remaining_frames() == 0) || (decoder_ && decoder_eof_)) {
         stop_pipeline();
     }
 }
