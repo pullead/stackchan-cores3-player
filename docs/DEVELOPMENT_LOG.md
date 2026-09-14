@@ -149,6 +149,23 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 对应提交：`c96d24b`、`c4efaf0`、`8e1ae02`、`8295872`、`df3e0f7`。
 
 仍未完成：真实 `ESP32-audioI2S` backend 的固定版本接入，以及 Phase 1 完整 ESP-IDF 编译、COM6 静音刷写和设备回归。当前没有执行任何未授权的 SD 写入或音量提升。
+
+## 2026-09-14：改用 ESP-IDF 固定 MP3 解码组件
+
+对完整 Arduino `ESP32-audioI2S` 进行审计后，确认其 `Audio` 对象会接管 I2S、FS 和音量，不适合直接嵌入 StackChan。随后改用固件已经锁定的 `espressif/esp_audio_codec` 2.4.1，其组件哈希为 `4d5cbe02f59fb45e40112d63317a8ddd00019cd4`，提供 `esp_mp3_dec_open/decode/reset/close`。
+
+新增真实 `EspMp3DecoderBackend`：
+
+- 只从 `AudioStream` 增量读取 MP3 编码数据；
+- 通过 `esp_mp3_dec_decode` 输出 PCM，不创建 Arduino `Audio`、I2S 或 `AudioSink`；
+- 校验采样率、1/2 声道、16-bit、完整交错帧和输出容量；
+- 区分正常 EOF、截断/损坏数据、I/O 错误和 decoder 错误；
+- 首帧解码后才知道格式并打开 AudioSink，双声道继续由 StackChan 控制器 downmix 为单声道；
+- 保持 WAV 路径原有启动顺序和默认静音策略。
+
+相关提交：`4b82fb8`、`eb00930`、`82233f5`、`6061762`、`ebc603b`。
+
+当前阻塞仅剩环境验证：本机 IDF 构建第一次因 `cmake` 不在 PATH 失败，需要重新加载 ESP-IDF 工具环境后运行完整固件编译；编译通过后再进行 COM6 静音刷写和真实 MP3 设备验证。
 ## 2026-09-14 — Real ESP32-audioI2S backend gate
 
 本阶段完成了真实解码 backend 的依赖审计边界。最新 `esp32-hifi` 主分支为 `1b9185e`，其 PlatformIO 声明使用未固定的 `ESP32-audioI2S` Git URL。该库的常规 `Audio` API 同时接管 Arduino FS 和 I2S 输出，不能直接塞入 CoreS3 的只读 `SdAudioStream`，否则会绕过 GPIO35/SPI3 显示让渡并产生第二个音频所有者。
