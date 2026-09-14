@@ -27,6 +27,9 @@ public:
     virtual AudioStreamStatus seek(uint64_t offset) noexcept = 0;
     virtual uint64_t tell() const noexcept = 0;
     virtual uint64_t size() const noexcept = 0;
+    // After close(), is_open() is false and all operations return Closed;
+    // tell()/size() return zero.
+    virtual bool is_open() const noexcept = 0;
     virtual AudioStreamStatus close() noexcept = 0;
 };
 
