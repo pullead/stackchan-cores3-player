@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <new>
 
 namespace media {
 
@@ -28,6 +29,7 @@ AudioDecodeStatus EspMp3DecoderBackend::map_error(int error) const noexcept {
     if (error == ESP_AUDIO_ERR_NOT_SUPPORT) return AudioDecodeStatus::Unsupported;
     if (error == ESP_AUDIO_ERR_DATA_LACK || error == ESP_AUDIO_ERR_CONTINUE) return AudioDecodeStatus::Ok;
     if (error == ESP_AUDIO_ERR_MEM_LACK) return AudioDecodeStatus::IoError;
+    if (error == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) return AudioDecodeStatus::InvalidArgument;
     return AudioDecodeStatus::Malformed;
 }
 
@@ -50,7 +52,10 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
     if (decoder_ == nullptr || stream_ == nullptr) { error_ = AudioDecodeStatus::NotOpen; return error_; }
     if (!block.valid()) { error_ = AudioDecodeStatus::InvalidArgument; return error_; }
     block.frames = 0;
-    const std::size_t output_bytes = block.capacity_frames * sizeof(int16_t);
+    // PcmBlock's backing storage is sized for two int16 samples per frame by
+    // LocalPlaybackController, even before the first MP3 header reveals the
+    // channel count.  Never hand the codec a mono-sized buffer for stereo.
+    const std::size_t output_bytes = block.capacity_frames * 2 * sizeof(int16_t);
 
     for (unsigned attempt = 0; attempt < 4; ++attempt) {
         if (input_size_ == 0 && !source_eof_) {
@@ -77,16 +82,41 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
             std::memmove(input_.data(), input_.data() + consumed, input_size_);
         }
         if (result == ESP_AUDIO_ERR_OK && out.decoded_size != 0) {
+            if (out.decoded_size > out.len || info.channel < 1 || info.channel > 2 ||
+                info.sample_rate == 0 || info.bits_per_sample != 16) {
+                error_ = AudioDecodeStatus::Malformed;
+                return error_;
+            }
+            if ((out.decoded_size % (sizeof(int16_t) * info.channel)) != 0) {
+                error_ = AudioDecodeStatus::Malformed;
+                return error_;
+            }
             if (info.sample_rate != 0) format_.sample_rate = info.sample_rate;
-            if (info.channel != 0) format_.channels = info.channel;
-            format_.bits_per_sample = info.bits_per_sample == 0 ? 16 : info.bits_per_sample;
+            format_.channels = info.channel;
+            format_.bits_per_sample = info.bits_per_sample;
             block.frames = out.decoded_size / (sizeof(int16_t) * format_.channels);
+            if (block.frames > block.capacity_frames) {
+                error_ = AudioDecodeStatus::InvalidArgument;
+                return error_;
+            }
             error_ = AudioDecodeStatus::Ok;
+            return error_;
+        }
+        if (result == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+            // The caller owns the fixed PcmBlock storage.  Treat a codec
+            // request for a larger frame as an explicit contract failure,
+            // rather than silently labelling it a malformed MP3.
+            error_ = AudioDecodeStatus::InvalidArgument;
             return error_;
         }
         if (result == ESP_AUDIO_ERR_DATA_LACK || result == ESP_AUDIO_ERR_CONTINUE ||
             (result == ESP_AUDIO_ERR_OK && out.decoded_size == 0)) {
-            if (source_eof_ && input_size_ == 0) { eof_ = true; error_ = AudioDecodeStatus::Eof; return error_; }
+            if (source_eof_) {
+                // Data remaining at EOF that cannot form a frame is a
+                // truncated/corrupt MP3, not a clean end-of-file.
+                if (input_size_ != 0) { error_ = AudioDecodeStatus::Malformed; return error_; }
+                eof_ = true; error_ = AudioDecodeStatus::Eof; return error_;
+            }
             if (input_size_ == input_.size()) { error_ = AudioDecodeStatus::Malformed; return error_; }
             std::size_t count = 0;
             const auto status = stream_->read(input_.data() + input_size_, input_.size() - input_size_, count);
@@ -105,7 +135,7 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
 }
 
 HifiDecoderBackend* create_esp_mp3_decoder_backend() noexcept {
-    return new EspMp3DecoderBackend();
+    return new (std::nothrow) EspMp3DecoderBackend();
 }
 
 }  // namespace media
