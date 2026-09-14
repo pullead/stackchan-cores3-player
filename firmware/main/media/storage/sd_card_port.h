@@ -11,14 +11,38 @@ class Spi3DisplayHandoff;
 
 namespace media {
 
-inline bool is_supported_wav_filename(std::string_view filename) noexcept {
+inline bool is_supported_audio_filename(std::string_view filename) noexcept {
     if (filename.size() <= 4 || filename.back() == '/' || filename.back() == '\\') {
         return false;
     }
 
-    const std::string_view extension = filename.substr(filename.size() - 4);
-    return extension[0] == '.' && (extension[1] == 'w' || extension[1] == 'W') &&
-           (extension[2] == 'a' || extension[2] == 'A') && (extension[3] == 'v' || extension[3] == 'V');
+    const std::size_t dot = filename.find_last_of('.');
+    if (dot == std::string_view::npos || dot + 1 >= filename.size()) {
+        return false;
+    }
+
+    std::string extension(filename.substr(dot + 1));
+    for (char& character : extension) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    return extension == "wav" || extension == "mp3" || extension == "aac" || extension == "m4a" ||
+           extension == "flac" || extension == "ogg" || extension == "opus";
+}
+
+inline bool is_supported_wav_filename(std::string_view filename) noexcept {
+    if (!is_supported_audio_filename(filename)) {
+        return false;
+    }
+    const std::size_t dot = filename.find_last_of('.');
+    if (dot == std::string_view::npos || filename.size() - dot != 4) {
+        return false;
+    }
+    const auto lower = [](char character) {
+        return character >= 'A' && character <= 'Z' ? static_cast<char>(character - 'A' + 'a') : character;
+    };
+    return lower(filename[dot + 1]) == 'w' && lower(filename[dot + 2]) == 'a' && lower(filename[dot + 3]) == 'v';
 }
 
 struct SdTrack {

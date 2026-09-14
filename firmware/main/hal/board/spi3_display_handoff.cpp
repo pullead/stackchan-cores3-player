@@ -7,8 +7,10 @@
 #include "esp_err.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_log.h"
+#include "esp_private/gpio.h"
 #include "esp_rom_gpio.h"
 #include "hal/board/hal_bridge.h"
+#include "soc/io_mux_reg.h"
 #include "soc/gpio_reg.h"
 #include "soc/gpio_sig_map.h"
 #include "soc/soc.h"
@@ -75,6 +77,13 @@ bool Spi3DisplayHandoff::acquire(bool& release_required) {
     if (!operations.drain_display(operations.context, last_error_)) {
         if (last_error_.empty()) {
             last_error_ = "failed to drain display transactions";
+        }
+        fail_and_unlock_locked(false, operations);
+        return false;
+    }
+    if (!operations.set_sd_chip_select_high(operations.context, last_error_)) {
+        if (last_error_.empty()) {
+            last_error_ = "failed to deselect the SD card";
         }
         fail_and_unlock_locked(false, operations);
         return false;
@@ -241,28 +250,53 @@ bool drain_display(void* raw_context, std::string& error) {
 }
 
 bool set_shared_pin_input(void*, std::string& error) {
-    // CoreS3 shares GPIO35 between LCD D/C and SPI3 MISO.  Direction alone is
-    // insufficient: the GPIO output matrix must be returned to SPI3 Q while SD
-    // traffic owns the bus, then the output driver must be disabled. Rebind the
-    // input matrix too: panel setup can leave GPIO35 routed only as LCD D/C.
-    // This board uses SPI3_HOST, whose MISO signal is SPI3_Q (not FSPIQ).
+    // CoreS3 shares GPIO35 between LCD D/C and SD MISO. Direction alone is
+    // insufficient: the output matrix must be returned to SPI3 Q while SD
+    // traffic owns the bus, then the output driver must be disabled. This
+    // matches Espressif's CoreS3 IDF BSP, which uses SPI3_HOST for SD.
     REG_WRITE(GPIO_ENABLE1_W1TC_REG, 1u << (GPIO_NUM_35 & 31));
+    const esp_err_t func_result = gpio_func_sel(GPIO_NUM_35, PIN_FUNC_GPIO);
+    if (func_result != ESP_OK) {
+        error = std::string("GPIO35 function select failed: ") + esp_err_to_name(func_result);
+        return false;
+    }
     const esp_err_t result = gpio_set_direction(GPIO_NUM_35, GPIO_MODE_INPUT);
     if (result != ESP_OK) {
         error = std::string("GPIO35 SD MISO handoff failed: ") + esp_err_to_name(result);
         return false;
     }
     esp_rom_gpio_connect_in_signal(GPIO_NUM_35, SPI3_Q_IN_IDX, false);
+    // The S3 input-matrix register stores the peripheral-select bit separately
+    // from the low six signal bits. Keep an explicit write here because the
+    // CoreS3 display setup can leave GPIO35 at GPIO_MATRIX_CONST_ZERO_INPUT
+    // (0x3c) even after the ROM helper has been called. SPI3_Q (67) therefore
+    // must be encoded as select=1 plus signal=3 (0x83).
+    REG_WRITE(GPIO_FUNC35_IN_SEL_CFG_REG,
+              GPIO_SIG35_IN_SEL | (SPI3_Q_IN_IDX & GPIO_FUNC35_IN_SEL_M));
+    // Match the official CoreS3 DCMISO handoff: while LCD output is disabled,
+    // route the output matrix to the same SPI peripheral and let the output
+    // enable bit below keep the pin in input mode.
     REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SPI3_Q_OUT_IDX);
-    ESP_LOGI(kTag, "GPIO35 SD route in=%lu out=%lu enable1=%08lx",
-             static_cast<unsigned long>(REG_READ(GPIO_FUNC35_IN_SEL_CFG_REG)),
+    gpio_input_enable(GPIO_NUM_35);
+    const uint32_t sd_input_route = REG_READ(GPIO_FUNC35_IN_SEL_CFG_REG);
+    ESP_LOGW(kTag, "GPIO35 SD route signal=%d in=0x%08lx mux=0x%08lx pin=0x%08lx levels(miso=%d sck=%d mosi=%d cs=%d) out=%lu enable1=%08lx",
+             SPI3_Q_IN_IDX,
+             static_cast<unsigned long>(sd_input_route),
+             static_cast<unsigned long>(REG_READ(IO_MUX_GPIO35_REG)),
+             static_cast<unsigned long>(REG_READ(GPIO_PIN35_REG)),
+             gpio_get_level(GPIO_NUM_35), gpio_get_level(GPIO_NUM_36),
+             gpio_get_level(GPIO_NUM_37), gpio_get_level(GPIO_NUM_4),
              static_cast<unsigned long>(REG_READ(GPIO_FUNC35_OUT_SEL_CFG_REG) & GPIO_FUNC35_OUT_SEL_M),
              static_cast<unsigned long>(REG_READ(GPIO_ENABLE1_REG)));
     return true;
 }
 
 bool set_sd_chip_select_high(void*, std::string& error) {
-    esp_err_t result = gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
+    // Keep the input buffer enabled while driving CS high.  On ESP32-S3 a
+    // pure GPIO_MODE_OUTPUT configuration may make GPIO_IN_REG read back as
+    // zero even when the output latch is high, which would make this
+    // electrical diagnostic ambiguous.
+    esp_err_t result = gpio_set_direction(GPIO_NUM_4, GPIO_MODE_INPUT_OUTPUT);
     if (result == ESP_OK) {
         result = gpio_set_level(GPIO_NUM_4, 1);
     }
@@ -271,6 +305,11 @@ bool set_sd_chip_select_high(void*, std::string& error) {
         ESP_LOGE(kTag, "%s; display remains locked to prevent SPI3 contention", error.c_str());
         return false;
     }
+    ESP_LOGW(kTag, "SD CS forced high, level=%d out=%d enable=%d input=%d",
+             gpio_get_level(GPIO_NUM_4),
+             static_cast<int>((REG_READ(GPIO_OUT_REG) >> GPIO_NUM_4) & 1u),
+             static_cast<int>((REG_READ(GPIO_ENABLE_REG) >> GPIO_NUM_4) & 1u),
+             static_cast<int>((REG_READ(GPIO_IN_REG) >> GPIO_NUM_4) & 1u));
     return true;
 }
 

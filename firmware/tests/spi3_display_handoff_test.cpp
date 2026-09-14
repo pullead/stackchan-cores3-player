@@ -17,7 +17,9 @@ struct FakeBackend {
     bool lock_succeeds = true;
     bool drain_succeeds = true;
     bool input_succeeds = true;
-    bool cs_succeeds = true;
+    bool cs_acquire_succeeds = true;
+    bool cs_release_succeeds = true;
+    size_t cs_call_count = 0;
     bool restore_succeeds = true;
 };
 
@@ -62,7 +64,8 @@ bool set_shared_pin_input(void* context, std::string& error) {
 bool set_sd_cs_high(void* context, std::string& error) {
     auto& backend = *static_cast<FakeBackend*>(context);
     backend.events.emplace_back("cs_high");
-    if (!backend.cs_succeeds) {
+    const bool succeeds = backend.cs_call_count++ == 0 ? backend.cs_acquire_succeeds : backend.cs_release_succeeds;
+    if (!succeeds) {
         error = "cs failed";
         return false;
     }
@@ -157,7 +160,7 @@ bool test_acquire_and_release_order() {
     }
     handoff.release();
 
-    return check(events_equal(backend.events, {"lock", "drain", "input", "cs_high", "restore_output", "unlock"}),
+    return check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high", "restore_output", "unlock"}),
                  "handoff follows safe pin order");
 }
 
@@ -191,28 +194,28 @@ bool test_input_failure_restores_safe_cs_and_unlocks() {
 
     return check(!handoff.acquire(), "input failure rejects acquire") &&
            check(handoff.last_error() == "input failed", "input error is preserved") &&
-           check(events_equal(backend.events, {"lock", "drain", "input", "cs_high", "restore_output", "unlock"}),
+           check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high", "restore_output", "unlock"}),
                  "input failure leaves SD deselected before unlock");
 }
 
 bool test_input_and_cs_failure_keeps_display_locked_until_guard_retry() {
     FakeBackend backend;
     backend.input_succeeds = false;
-    backend.cs_succeeds = false;
+    backend.cs_release_succeeds = false;
     auto handoff = make_handoff(backend);
     board::Spi3DisplayHandoffGuard guard(handoff);
 
     if (!check(!guard.acquired(), "input failure does not grant SD access") ||
         !check(handoff.is_acquired(), "failed deselect keeps the display handoff active") ||
-        !check(events_equal(backend.events, {"lock", "drain", "input", "cs_high"}),
+        !check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high"}),
                "input and chip-select failure keeps the display locked")) {
         return false;
     }
 
-    backend.cs_succeeds = true;
+    backend.cs_release_succeeds = true;
     return check(guard.release(), "guard retries cleanup after failed acquire") &&
            check(!handoff.is_acquired(), "successful cleanup retry ends failed handoff") &&
-           check(events_equal(backend.events, {"lock", "drain", "input", "cs_high", "cs_high", "restore_output", "unlock"}),
+           check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high", "cs_high", "restore_output", "unlock"}),
                  "failed acquire unlocks only after SD deselect succeeds");
 }
 
@@ -232,7 +235,7 @@ bool test_guard_releases_exactly_once_after_move() {
         }
     }
 
-    return check(events_equal(backend.events, {"lock", "drain", "input", "cs_high", "restore_output", "unlock"}),
+    return check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high", "restore_output", "unlock"}),
                  "moved guard releases once");
 }
 
@@ -250,7 +253,7 @@ bool test_nested_acquire_is_rejected_without_double_release() {
     }
 
     return check(events_equal(backend.events,
-                              {"lock", "drain", "input", "lock", "unlock", "cs_high", "restore_output", "unlock"}),
+                              {"lock", "drain", "cs_high", "input", "lock", "unlock", "cs_high", "restore_output", "unlock"}),
                  "nested guard releases only its recursive lock layer before outer release");
 }
 
@@ -288,19 +291,19 @@ bool test_other_thread_times_out_without_entering_handoff_work() {
         if (!check(!second_acquired, "second thread times out while first owns display lock") ||
             !check(second_error == "display lock timed out", "second thread sees lock timeout") ||
             !check(handoff.is_acquired(), "first handoff remains acquired after contention") ||
-            !check(events_equal(backend.events, {"lock", "drain", "input", "lock"}),
+            !check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "lock"}),
                    "contending thread never drains or switches shared pins")) {
             return false;
         }
     }
 
-    return check(events_equal(backend.events, {"lock", "drain", "input", "lock", "cs_high", "restore_output", "unlock"}),
+    return check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "lock", "cs_high", "restore_output", "unlock"}),
                  "first thread releases normally after contending thread times out");
 }
 
 bool test_cs_failure_keeps_display_locked_until_retry_succeeds() {
     FakeBackend backend;
-    backend.cs_succeeds = false;
+    backend.cs_release_succeeds = false;
     auto handoff = make_handoff(backend);
     board::Spi3DisplayHandoffGuard guard(handoff);
 
@@ -309,22 +312,22 @@ bool test_cs_failure_keeps_display_locked_until_retry_succeeds() {
         !check(handoff.last_error() == "cs failed", "chip-select error is preserved") ||
         !check(handoff.is_acquired(), "handoff remains acquired after chip-select failure") ||
         !check(guard.acquired(), "guard remains active so release can be retried") ||
-        !check(events_equal(backend.events, {"lock", "drain", "input", "cs_high"}),
+        !check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high"}),
                "chip-select failure keeps the display locked")) {
         return false;
     }
 
-    backend.cs_succeeds = true;
+    backend.cs_release_succeeds = true;
     return check(guard.release(), "retry succeeds after chip-select is restored") &&
            check(!handoff.is_acquired(), "successful retry ends the handoff") &&
            check(!guard.acquired(), "successful retry deactivates the guard") &&
-           check(events_equal(backend.events, {"lock", "drain", "input", "cs_high", "cs_high", "restore_output", "unlock"}),
+           check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high", "cs_high", "restore_output", "unlock"}),
                  "only a successful chip-select restore unlocks the display");
 }
 
 bool test_persistent_cs_failure_is_fail_closed_on_guard_destruction() {
     FakeBackend backend;
-    backend.cs_succeeds = false;
+    backend.cs_release_succeeds = false;
     auto handoff = make_handoff(backend);
 
     {
@@ -335,13 +338,13 @@ bool test_persistent_cs_failure_is_fail_closed_on_guard_destruction() {
     }
 
     return check(handoff.is_acquired(), "persistent chip-select failure keeps handoff acquired") &&
-           check(events_equal(backend.events, {"lock", "drain", "input", "cs_high"}),
+           check(events_equal(backend.events, {"lock", "drain", "cs_high", "input", "cs_high"}),
                  "guard destruction leaves the display locked when SD cannot be deselected");
 }
 
 bool test_move_assignment_does_not_abandon_failed_release() {
     FakeBackend first_backend;
-    first_backend.cs_succeeds = false;
+    first_backend.cs_release_succeeds = false;
     FakeBackend second_backend;
     auto first_handoff = make_handoff(first_backend);
     auto second_handoff = make_handoff(second_backend);
@@ -354,12 +357,12 @@ bool test_move_assignment_does_not_abandon_failed_release() {
         !check(second_handoff.is_acquired(), "failed move assignment leaves source ownership intact") ||
         !check(first.acquired(), "destination guard keeps failed-release ownership") ||
         !check(second.acquired(), "source guard remains active after rejected move assignment") ||
-        !check(events_equal(first_backend.events, {"lock", "drain", "input", "cs_high"}),
+        !check(events_equal(first_backend.events, {"lock", "drain", "cs_high", "input", "cs_high"}),
                "failed move-assignment release keeps first display locked")) {
         return false;
     }
 
-    first_backend.cs_succeeds = true;
+    first_backend.cs_release_succeeds = true;
     return check(first.release(), "first guard can retry after rejected move assignment") &&
            check(second.release(), "source guard can still release normally");
 }

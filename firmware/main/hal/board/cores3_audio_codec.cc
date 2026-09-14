@@ -1,5 +1,8 @@
 #include "cores3_audio_codec.h"
 
+#include "media/audio/volume_policy.h"
+#include "settings.h"
+
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
@@ -215,6 +218,9 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
         return;
     }
     if (enable) {
+        Settings settings("audio", false);
+        output_volume_ = media::restore_persisted_volume(
+            settings.GetInt("output_volume", output_volume_));
         // Play 16bit 1 channel
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,

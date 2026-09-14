@@ -55,9 +55,8 @@ void AppLocalMusic::onClose() {
 
     LvglLockGuard lock;
     back_.reset();
-    for (auto& row : track_rows_) {
-        row.reset();
-    }
+    track_rows_.clear();
+    track_list_.reset();
     detail_.reset();
     heading_.reset();
     title_.reset();
@@ -94,16 +93,18 @@ void AppLocalMusic::create_view() {
     detail_->setTextAlign(LV_TEXT_ALIGN_CENTER);
     detail_->align(LV_ALIGN_TOP_MID, 0, 48);
 
-    for (std::size_t index = 0; index < track_rows_.size(); ++index) {
-        auto& row = track_rows_[index];
-        row = std::make_unique<Label>(*panel_);
-        row->setTextFont(&lv_font_montserrat_14);
-        row->setTextColor(lv_color_hex(kPrimary));
-        row->setWidth(286);
-        row->setLongMode(LV_LABEL_LONG_SCROLL_CIRCULAR);
-        row->align(LV_ALIGN_TOP_LEFT, 17, 66 + static_cast<int>(index) * 16);
-        row->setHidden(true);
-    }
+    track_list_ = std::make_unique<Container>(*panel_);
+    track_list_->setSize(292, 122);
+    track_list_->align(LV_ALIGN_TOP_MID, 0, 66);
+    track_list_->setBgOpa(LV_OPA_TRANSP);
+    track_list_->setBorderWidth(0);
+    track_list_->setRadius(0);
+    track_list_->setPadding(2, 2, 0, 0);
+    track_list_->setFlexFlow(LV_FLEX_FLOW_COLUMN);
+    track_list_->setFlexAlign(LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    track_list_->setPadRow(4);
+    track_list_->setScrollDir(LV_DIR_VER);
+    track_list_->setScrollbarMode(LV_SCROLLBAR_MODE_ACTIVE);
 
     back_ = std::make_unique<Button>(*panel_);
     back_->setSize(104, 34);
@@ -122,14 +123,15 @@ void AppLocalMusic::render(const local_music::BrowseView& view) {
     heading_->setText(view.heading);
     detail_->setText(view.detail);
 
-    for (std::size_t index = 0; index < track_rows_.size(); ++index) {
-        auto& row = track_rows_[index];
-        if (index < view.rows.size()) {
-            const std::string numbered_title = std::to_string(index + 1) + ".  " + view.rows[index];
-            row->setText(numbered_title);
-            row->setHidden(false);
-        } else {
-            row->setHidden(true);
-        }
+    track_rows_.clear();
+    for (std::size_t index = 0; index < view.rows.size(); ++index) {
+        auto row = std::make_unique<Label>(*track_list_);
+        row->setText(std::to_string(index + 1) + ".  " + view.rows[index]);
+        row->setTextFont(&lv_font_montserrat_14);
+        row->setTextColor(lv_color_hex(kPrimary));
+        row->setWidth(276);
+        row->setHeight(18);
+        row->setLongMode(LV_LABEL_LONG_CLIP);
+        track_rows_.push_back(std::move(row));
     }
 }

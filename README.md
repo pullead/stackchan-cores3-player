@@ -24,6 +24,12 @@ The **factory firmware** is feature-rich, including an AI Agent, lively and expr
 
 - Board support package: https://github.com/m5stack/StackChan-BSP
 
+## CoreS3 Player 移植说明
+
+本分支包含面向 StackChan CoreS3 的个人媒体移植：保留官方 AI 语音、表情和舵机功能，增加只读 SD 卡目录扫描、本地音乐入口、长文件名和可滚动曲目列表。媒体和 AI 使用互斥模式，默认音量保持 0%。
+
+完整的移植背景、硬件分析、验证证据和未完成项见 [`docs/DEVELOPMENT_LOG.md`](docs/DEVELOPMENT_LOG.md)，关键的 CoreS3 SPI3 资源决策见 [`docs/decisions/ADR-001-cores3-sd-spi-handoff.md`](docs/decisions/ADR-001-cores3-sd-spi-handoff.md)。
+
 Thank you to the contributors of the StackChan community, especially: 
 
 | ![](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/avatar_stack_chan.jpg) | ![](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/avatar_takao.jpg) |

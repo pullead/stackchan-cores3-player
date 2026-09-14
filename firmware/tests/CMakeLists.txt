@@ -147,3 +147,12 @@ target_include_directories(aw9523_sd_power_test PRIVATE
 target_compile_features(aw9523_sd_power_test PRIVATE cxx_std_17)
 
 add_test(NAME aw9523_sd_power_test COMMAND $<TARGET_FILE:aw9523_sd_power_test>)
+
+add_executable(fatfs_config_test
+    fatfs_config_test.cpp
+)
+
+target_compile_features(fatfs_config_test PRIVATE cxx_std_23)
+
+add_test(NAME fatfs_config_test
+    COMMAND $<TARGET_FILE:fatfs_config_test> ${CMAKE_CURRENT_SOURCE_DIR}/../sdkconfig)

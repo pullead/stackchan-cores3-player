@@ -36,6 +36,10 @@
 
 # Build files
 build/
+build-*/
+tests/build-*/
+*.tmp
+tmp/
 cmake-build-*/
 /components/
 managed_components/

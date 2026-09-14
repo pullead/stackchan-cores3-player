@@ -24,4 +24,10 @@ constexpr uint8_t clamp_user_volume(int value) noexcept {
     return static_cast<uint8_t>(value);
 }
 
+// Unlike the upstream AI codec startup policy, zero is an intentional mute
+// value and must survive a mode switch or reboot.
+constexpr uint8_t restore_persisted_volume(int value) noexcept {
+    return clamp_user_volume(value);
+}
+
 }  // namespace media

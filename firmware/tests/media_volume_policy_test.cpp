@@ -33,5 +33,9 @@ int main() {
     failures += !check_equal("clamp_user_volume(42)", media::clamp_user_volume(42), normal_volume);
     failures += !check_equal("clamp_user_volume(100)", media::clamp_user_volume(100), maximum_volume);
     failures += !check_equal("clamp_user_volume(101)", media::clamp_user_volume(101), maximum_volume);
+    failures += !check_equal("restore_persisted_volume(-1)", media::restore_persisted_volume(-1), muted);
+    failures += !check_equal("restore_persisted_volume(0)", media::restore_persisted_volume(0), muted);
+    failures += !check_equal("restore_persisted_volume(42)", media::restore_persisted_volume(42), normal_volume);
+    failures += !check_equal("restore_persisted_volume(101)", media::restore_persisted_volume(101), maximum_volume);
     return failures == 0 ? 0 : 1;
 }

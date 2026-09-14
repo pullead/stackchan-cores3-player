@@ -18,6 +18,14 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_ili9341.h>
 #include <esp_timer.h>
+#include "esp_private/gpio.h"
+#include <driver/sdspi_host.h>
+#include <esp_vfs_fat.h>
+#include <esp_rom_gpio.h>
+#include <sdmmc_cmd.h>
+#include "soc/io_mux_reg.h"
+#include "soc/gpio_reg.h"
+#include "soc/soc.h"
 #include <algorithm>
 #include "stackchan_camera.h"
 #include "hal_bridge.h"
@@ -70,6 +78,8 @@ esp_err_t ApplyIli9342eInit(esp_lcd_panel_io_handle_t panel_io)
 }
 
 }  // namespace
+
+void ProbeSdBeforeDisplay();
 
 class Pmic : public Axp2101 {
 public:
@@ -139,6 +149,20 @@ public:
             if (!(val & 0x80)) {
                 WriteReg(0x90, val | 0x80);
             }
+        }
+    }
+
+    void SetSdCardPower(bool enabled)
+    {
+        constexpr uint8_t kSdEnableBit = 0x08;  // AXP2101 ALDO4
+        if (enabled) {
+            // ALDO4: 500mV + 28 * 100mV = 3.3V.
+            WriteReg(0x95, 33 - 5);
+            const uint8_t enable = ReadReg(0x90);
+            WriteReg(0x90, static_cast<uint8_t>(enable | kSdEnableBit));
+        } else {
+            const uint8_t enable = ReadReg(0x90);
+            WriteReg(0x90, static_cast<uint8_t>(enable & ~kSdEnableBit));
         }
     }
 
@@ -216,6 +240,14 @@ public:
         WriteReg(0x02, enabled_output);
         ESP_LOGI(TAG, "SD power enabled via AW9523 P0_4: config=0x%02X output=0x%02X",
                  enabled_config, enabled_output);
+    }
+
+    void DisableSdCardPower()
+    {
+        const uint8_t config = ReadReg(0x04);
+        const uint8_t output = ReadReg(0x02);
+        WriteReg(0x04, static_cast<uint8_t>(config | board::aw9523::kSdEnableMask));
+        WriteReg(0x02, static_cast<uint8_t>(output & static_cast<uint8_t>(~board::aw9523::kSdEnableMask)));
     }
 
     void ResetAw88298()
@@ -451,8 +483,15 @@ private:
     {
         ESP_LOGI(TAG, "Init AW9523");
         aw9523_ = new Aw9523(i2c_bus_, 0x58);
+        // A card may have been left in SD/MMC mode by another host. Reset the
+        // removable media electrically before selecting SPI mode. This is a
+        // power-cycle only; it never writes or formats the card.
+        aw9523_->DisableSdCardPower();
+        pmic_->SetSdCardPower(false);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        pmic_->SetSdCardPower(true);
         aw9523_->EnableSdCardPower();
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     void PollTouchpad()
@@ -496,12 +535,49 @@ private:
     {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num      = GPIO_NUM_37;
+        // GPIO35 is shared by the CoreS3 LCD D/C line and the SD MISO line.
+        // Keep it in the bus configuration so SDSPI gets a complete MISO
+        // bus attribute; the handoff disables the display-side output and
+        // reconnects the input matrix when the card owns the bus.
         buscfg.miso_io_num      = GPIO_NUM_35;
         buscfg.sclk_io_num      = GPIO_NUM_36;
         buscfg.quadwp_io_num    = GPIO_NUM_NC;
         buscfg.quadhd_io_num    = GPIO_NUM_NC;
-        buscfg.max_transfer_sz  = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
+        // Match the CoreS3 BSP's shared SD/LCD SPI bus configuration. The
+        // display driver queues its own transactions; keeping the bus DMA
+        // limit at the BSP value avoids making SD transactions depend on a
+        // full-frame LCD transfer size.
+        buscfg.max_transfer_sz  = 4000;
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
+
+        // On CoreS3 GPIO35 is also the LCD D/C pin.  IDF's bus initialization
+        // leaves the input matrix at the constant-zero route until a client
+        // claims the bus, so make the SD MISO route explicit before the first
+        // (pre-display) card probe.  The same mapping is re-applied by the
+        // display handoff after the LCD driver is installed.
+        REG_WRITE(GPIO_ENABLE1_W1TC_REG, 1u << (GPIO_NUM_35 & 31));
+        ESP_ERROR_CHECK(gpio_func_sel(GPIO_NUM_35, PIN_FUNC_GPIO));
+        ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_35, GPIO_MODE_INPUT));
+        esp_rom_gpio_connect_in_signal(GPIO_NUM_35, SPI3_Q_IN_IDX, false);
+        REG_WRITE(GPIO_FUNC35_IN_SEL_CFG_REG,
+                  GPIO_SIG35_IN_SEL | (SPI3_Q_IN_IDX & GPIO_FUNC35_IN_SEL_M));
+        REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SPI3_Q_OUT_IDX);
+        gpio_input_enable(GPIO_NUM_35);
+        ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_4, GPIO_MODE_INPUT_OUTPUT));
+        ESP_ERROR_CHECK(gpio_set_level(GPIO_NUM_4, 1));
+        // GPIO3 is the LCD CS on CoreS3.  Before esp_lcd creates its panel
+        // IO, the pin is otherwise left floating/low and the LCD can drive
+        // the shared SPI_MISO/GPIO35 net during the SD probe.
+        ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_3, GPIO_MODE_OUTPUT));
+        ESP_ERROR_CHECK(gpio_set_level(GPIO_NUM_3, 1));
+        ESP_LOGI(TAG, "Pre-display SPI3 route: GPIO35 in=0x%08lx out=0x%08lx mux=0x%08lx pin=0x%08lx enable1=0x%08lx levels(miso=%d sck=%d mosi=%d sdcs=%d lcdcs=%d)",
+                 static_cast<unsigned long>(REG_READ(GPIO_FUNC35_IN_SEL_CFG_REG)),
+                 static_cast<unsigned long>(REG_READ(GPIO_FUNC35_OUT_SEL_CFG_REG) & GPIO_FUNC35_OUT_SEL_M),
+                 static_cast<unsigned long>(REG_READ(IO_MUX_GPIO35_REG)),
+                 static_cast<unsigned long>(REG_READ(GPIO_PIN35_REG)),
+                 static_cast<unsigned long>(REG_READ(GPIO_ENABLE1_REG)),
+                 gpio_get_level(GPIO_NUM_35), gpio_get_level(GPIO_NUM_36),
+                 gpio_get_level(GPIO_NUM_37), gpio_get_level(GPIO_NUM_4), gpio_get_level(GPIO_NUM_3));
     }
 
     void InitializeIli9342Display()
@@ -615,6 +691,7 @@ public:
         I2cDetect();
         InitializeFt6336();
         InitializeSpi();
+        ProbeSdBeforeDisplay();
         InitializeIli9342Display();
         InitializeCamera();
         StartTouchpadTimer();
@@ -760,6 +837,44 @@ uint8_t hal_bridge::board_get_speaker_volume()
     Settings settings("audio", false);
     const int volume = settings.GetInt("output_volume", 0);
     return static_cast<uint8_t>(std::clamp(volume, 0, 100));
+}
+
+// Diagnostic only: read LBA0 before the LCD panel IO claims GPIO35 as D/C.
+// The mount is read-only and is immediately unmounted; it never formats or
+// writes the shared card. A successful read here would isolate the remaining
+// fault to LCD initialization/handoff rather than the CoreS3 SD wiring.
+void ProbeSdBeforeDisplay()
+{
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI3_HOST;
+    host.max_freq_khz = SDMMC_FREQ_PROBING;
+
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.host_id = SPI3_HOST;
+    slot_config.gpio_cs = GPIO_NUM_4;
+    slot_config.wait_for_miso = 0;
+
+    esp_vfs_fat_mount_config_t mount_config = {};
+    mount_config.format_if_mount_failed = false;
+    mount_config.max_files = 1;
+
+    sdmmc_card_t* card = nullptr;
+    const esp_err_t mount_result = esp_vfs_fat_sdspi_mount(
+        "/sdprecheck", &host, &slot_config, &mount_config, &card);
+    if (mount_result != ESP_OK) {
+        ESP_LOGW(TAG, "Pre-display SD mount failed: %s", esp_err_to_name(mount_result));
+        return;
+    }
+
+    uint8_t sector[512] = {};
+    const esp_err_t read_result = sdmmc_read_sectors(card, sector, 0, 1);
+    ESP_LOGW(TAG, "Pre-display SD LBA0 result=%s first16=%02X%02X%02X%02X signature=%02X%02X capacity=%d",
+             esp_err_to_name(read_result), sector[0], sector[1], sector[2], sector[3],
+             sector[510], sector[511], card->csd.capacity);
+    const esp_err_t unmount_result = esp_vfs_fat_sdcard_unmount("/sdprecheck", card);
+    if (unmount_result != ESP_OK) {
+        ESP_LOGW(TAG, "Pre-display SD unmount failed: %s", esp_err_to_name(unmount_result));
+    }
 }
 
 void hal_bridge::toggle_xiaozhi_chat_state()
