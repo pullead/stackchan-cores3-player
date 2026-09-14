@@ -10,11 +10,12 @@ bool mount(void* c, std::string&) { static_cast<Fake*>(c)->mounted = true; retur
 bool open(void* c, std::string_view path, void*& h, uint64_t& size, std::string&) {
     if (path != "/sdcard/a.mp3") return false; h = c; size = static_cast<Fake*>(c)->data.size(); return true;
 }
-std::size_t read(void*, void* h, uint8_t* out, std::size_t n, std::string&) {
+std::size_t read(void*, void* h, uint8_t* out, std::size_t n, bool& io_error, std::string&) {
+    io_error = false;
     auto* f = static_cast<Fake*>(h); const auto count = (f->position < f->data.size()) ? (f->data.size() - f->position < n ? f->data.size() - f->position : n) : 0; std::memcpy(out, f->data.data() + f->position, count); f->position += count; return count;
 }
 bool seek(void*, void* h, uint64_t offset, std::string&) { auto* f = static_cast<Fake*>(h); if (offset > f->data.size()) return false; f->position = static_cast<std::size_t>(offset); return true; }
-void close(void* c, void*) { static_cast<Fake*>(c)->closed = true; }
+bool close(void* c, void*, std::string&) { static_cast<Fake*>(c)->closed = true; return true; }
 bool unmount(void* c, std::string&) { static_cast<Fake*>(c)->mounted = false; return true; }
 bool lock(void*, std::string&) { return true; } bool drain(void*, std::string&) { return true; } bool pin(void*, std::string&) { return true; } void unlock(void*) {}
 }

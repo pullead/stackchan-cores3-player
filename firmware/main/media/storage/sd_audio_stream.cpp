@@ -27,8 +27,10 @@ AudioStreamStatus SdAudioStream::read(uint8_t* destination, std::size_t capacity
     if (destination == nullptr && capacity != 0) return AudioStreamStatus::InvalidArgument;
     if (capacity == 0) return AudioStreamStatus::Ok;
     std::string error;
-    bytes_read = operations_.read(operations_.context, file_, destination, capacity, error);
+    bool io_error = false;
+    bytes_read = operations_.read(operations_.context, file_, destination, capacity, io_error, error);
     position_ += bytes_read;
+    if (io_error) { last_error_ = error.empty() ? "SD read failed" : error; return AudioStreamStatus::IoError; }
     if (bytes_read == 0) return position_ >= size_ ? AudioStreamStatus::Eof : (last_error_ = "SD read failed", AudioStreamStatus::IoError);
     return AudioStreamStatus::Ok;
 }
@@ -43,11 +45,11 @@ AudioStreamStatus SdAudioStream::seek(uint64_t offset) noexcept {
 }
 
 AudioStreamStatus SdAudioStream::close() noexcept {
-    if (file_ != nullptr) { operations_.close(operations_.context, file_); file_ = nullptr; }
+    AudioStreamStatus result = AudioStreamStatus::Ok;
+    if (file_ != nullptr) { std::string error; if (!operations_.close(operations_.context, file_, error)) { last_error_ = error; result = AudioStreamStatus::IoError; } file_ = nullptr; }
     open_ = false;
     position_ = 0;
     size_ = 0;
-    AudioStreamStatus result = AudioStreamStatus::Ok;
     if (mounted_) { std::string error; if (!operations_.unmount(operations_.context, error)) { last_error_ = error; result = AudioStreamStatus::IoError; } mounted_ = false; }
     handoff_guard_.reset();
     return result;

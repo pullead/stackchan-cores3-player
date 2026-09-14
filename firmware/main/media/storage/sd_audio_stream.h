@@ -18,9 +18,9 @@ struct SdAudioFileOperations {
     void* context = nullptr;
     bool (*mount)(void*, std::string&) = nullptr;
     bool (*open)(void*, std::string_view, void*& handle, uint64_t& size, std::string&) = nullptr;
-    std::size_t (*read)(void*, void*, uint8_t*, std::size_t, std::string&) = nullptr;
+    std::size_t (*read)(void*, void*, uint8_t*, std::size_t, bool&, std::string&) = nullptr;
     bool (*seek)(void*, void*, uint64_t, std::string&) = nullptr;
-    void (*close)(void*, void*) = nullptr;
+    bool (*close)(void*, void*, std::string&) = nullptr;
     bool (*unmount)(void*, std::string&) = nullptr;
 };
 
