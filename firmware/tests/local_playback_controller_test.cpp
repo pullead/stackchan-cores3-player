@@ -6,6 +6,7 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#include <memory>
 
 static_assert(!std::is_copy_constructible_v<media::LocalPlaybackController>);
 static_assert(!std::is_copy_assignable_v<media::LocalPlaybackController>);
@@ -57,6 +58,39 @@ private:
     }
 
     size_t write_result_index = 0;
+};
+
+class FakeStream final : public media::AudioStream {
+public:
+    media::AudioStreamStatus read(uint8_t*, size_t, size_t& count) noexcept override { count = 0; return media::AudioStreamStatus::Eof; }
+    media::AudioStreamStatus seek(uint64_t) noexcept override { return media::AudioStreamStatus::Ok; }
+    uint64_t tell() const noexcept override { return 0; }
+    uint64_t size() const noexcept override { return 0; }
+    bool is_open() const noexcept override { return open_; }
+    media::AudioStreamStatus close() noexcept override { open_ = false; closed = true; return media::AudioStreamStatus::Ok; }
+    bool closed = false;
+private:
+    bool open_ = true;
+};
+
+class FakeDecoder final : public media::AudioDecoder {
+public:
+    media::AudioDecodeStatus open(media::AudioStream&) noexcept override { opened = true; return open_result; }
+    media::AudioDecodeStatus decode(media::PcmBlock& block) noexcept override {
+        if (decode_error) return media::AudioDecodeStatus::IoError;
+        if (done) return media::AudioDecodeStatus::Eof;
+        block.samples[0] = 11; block.samples[1] = 22; block.frames = 2; done = true; return media::AudioDecodeStatus::Ok;
+    }
+    const media::PcmFormat& format() const noexcept override { return pcm; }
+    const media::AudioMetadata& metadata() const noexcept override { return metadata_; }
+    bool eof() const noexcept override { return done; }
+    media::AudioDecodeStatus last_error() const noexcept override { return media::AudioDecodeStatus::IoError; }
+    media::PcmFormat pcm{48000, 1, 16};
+    media::AudioMetadata metadata_{};
+    media::AudioDecodeStatus open_result = media::AudioDecodeStatus::Ok;
+    bool decode_error = false;
+    bool opened = false;
+    bool done = false;
 };
 
 bool check(bool condition, const char* expression) {
@@ -263,6 +297,24 @@ bool test_stop_for_ai_flushes_before_close() {
                  "AI handoff flushes before close");
 }
 
+bool test_decoder_stream_route_writes_bounded_pcm_and_closes() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    auto* decoder = new FakeDecoder();
+    media::LocalPlaybackController controller(sink);
+    controller.select("demo.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    if (!check(controller.start(), "decoder route starts") || !check(decoder->opened, "decoder opens stream")) return false;
+    controller.pump();
+    const auto playing = controller.snapshot();
+    if (!check(playing.state == media::PlaybackState::Playing, "decoded PCM is playing") ||
+        !check(playing.played_frames == 2, "decoded frames reach sink") ||
+        !check(sink.written_pcm[0] == std::vector<int16_t>{11, 22}, "decoded PCM is preserved")) return false;
+    controller.pump();
+    return check(controller.snapshot().state == media::PlaybackState::Idle, "decoder EOF returns idle") &&
+           check(stream->closed, "EOF closes stream") && check(controller.snapshot().muted, "decoder route remains muted");
+}
+
 }  // namespace
 
 int main() {
@@ -274,5 +326,6 @@ int main() {
     failures += !test_overreported_write_flushes_and_closes();
     failures += !test_open_failure_flushes_and_closes();
     failures += !test_stop_for_ai_flushes_before_close();
+    failures += !test_decoder_stream_route_writes_bounded_pcm_and_closes();
     return failures == 0 ? 0 : 1;
 }

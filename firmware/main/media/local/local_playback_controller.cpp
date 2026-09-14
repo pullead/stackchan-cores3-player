@@ -1,6 +1,7 @@
 #include "media/local/local_playback_controller.h"
 
 #include <array>
+#include <memory>
 #include <utility>
 
 namespace media {
@@ -16,11 +17,28 @@ void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav
     pending_pcm_.clear();
     pending_offset_ = 0;
     error_.clear();
+    decoder_eof_ = false;
+}
+
+void LocalPlaybackController::select(std::string title, std::unique_ptr<AudioStream> stream,
+                                     std::unique_ptr<AudioDecoder> decoder) {
+    stop();
+    title_ = std::move(title);
+    selected_bytes_.clear();
+    stream_ = std::move(stream);
+    decoder_ = std::move(decoder);
+    total_frames_ = 0;
+    played_frames_ = 0;
+    pending_pcm_.clear();
+    pending_offset_ = 0;
+    decoder_eof_ = false;
+    error_.clear();
 }
 
 bool LocalPlaybackController::start() {
-    if (state_machine_.state() != PlaybackState::Idle || selected_bytes_.empty()) {
-        error_ = "No local WAV selected";
+    if (state_machine_.state() != PlaybackState::Idle ||
+        (selected_bytes_.empty() && (!stream_ || !decoder_))) {
+        error_ = "No local track selected";
         return false;
     }
 
@@ -30,18 +48,35 @@ bool LocalPlaybackController::start() {
     pending_pcm_.clear();
     pending_offset_ = 0;
     state_machine_.transition(PlaybackState::Preparing);
-    if (!reader_.open(selected_bytes_)) {
-        fail("Invalid or unsupported WAV");
-        return false;
+    PcmFormat format{};
+    if (decoder_) {
+        if (!stream_->is_open()) {
+            fail("Audio stream is not open");
+            return false;
+        }
+        if (decoder_->open(*stream_) != AudioDecodeStatus::Ok) {
+            fail("Audio decoder open failed");
+            return false;
+        }
+        format = decoder_->format();
+        if (!format.valid() || format.channels != 1) {
+            fail("Unsupported decoded PCM format");
+            return false;
+        }
+    } else {
+        if (!reader_.open(selected_bytes_)) {
+            fail("Invalid or unsupported WAV");
+            return false;
+        }
+        if (!has_supported_format()) {
+            fail("Unsupported PCM format");
+            return false;
+        }
+        total_frames_ = reader_.remaining_frames();
+        format = reader_.format();
     }
-    if (!has_supported_format()) {
-        fail("Unsupported PCM format");
-        return false;
-    }
-
-    total_frames_ = reader_.remaining_frames();
     state_machine_.transition(PlaybackState::Buffering);
-    if (!sink_.open(reader_.format())) {
+    if (!sink_.open(format)) {
         sink_open_ = true;
         fail("Audio sink open failed");
         return false;
@@ -59,10 +94,26 @@ void LocalPlaybackController::pump() {
 
     if (pending_pcm_.empty()) {
         std::array<int16_t, kPlaybackChunkFrames> frames{};
-        const size_t frame_count = reader_.read_frames(frames.data(), frames.size());
-        if (frame_count == 0) {
-            stop_pipeline();
-            return;
+        size_t frame_count = 0;
+        if (decoder_) {
+            PcmBlock block{frames.data(), frames.size(), 0};
+            const AudioDecodeStatus result = decoder_->decode(block);
+            if (result == AudioDecodeStatus::Eof || (result == AudioDecodeStatus::Ok && block.frames == 0)) {
+                decoder_eof_ = true;
+                stop_pipeline();
+                return;
+            }
+            if (result != AudioDecodeStatus::Ok || block.frames > frames.size()) {
+                fail("Audio decoder failed");
+                return;
+            }
+            frame_count = block.frames;
+        } else {
+            frame_count = reader_.read_frames(frames.data(), frames.size());
+            if (frame_count == 0) {
+                stop_pipeline();
+                return;
+            }
         }
         pending_pcm_.assign(frames.begin(), frames.begin() + frame_count);
         pending_offset_ = 0;
@@ -82,7 +133,7 @@ void LocalPlaybackController::pump() {
 
     pending_pcm_.clear();
     pending_offset_ = 0;
-    if (reader_.remaining_frames() == 0) {
+    if (!decoder_ && reader_.remaining_frames() == 0) {
         stop_pipeline();
     }
 }
@@ -125,6 +176,9 @@ void LocalPlaybackController::stop_pipeline() {
     pending_pcm_.clear();
     pending_offset_ = 0;
     if (state_machine_.state() == PlaybackState::Idle) {
+        if (stream_) stream_->close();
+        stream_.reset();
+        decoder_.reset();
         return;
     }
     if (state_machine_.state() != PlaybackState::Stopping) {
@@ -135,12 +189,16 @@ void LocalPlaybackController::stop_pipeline() {
 }
 
 void LocalPlaybackController::close_sink() {
-    if (!sink_open_) {
-        return;
+    if (sink_open_) {
+        sink_.flush();
+        sink_.close();
+        sink_open_ = false;
     }
-    sink_.flush();
-    sink_.close();
-    sink_open_ = false;
+    if (stream_) {
+        stream_->close();
+        stream_.reset();
+    }
+    decoder_.reset();
 }
 
 }  // namespace media
