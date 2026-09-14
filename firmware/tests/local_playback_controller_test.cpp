@@ -200,10 +200,14 @@ bool test_malformed_selection_never_opens_sink() {
 
     const auto started = controller.start();
     const auto snapshot = controller.snapshot();
-    return check(!started, "malformed WAV does not start") &&
-           check(snapshot.state == media::PlaybackState::Idle, "parse error returns Idle") &&
+    const bool failed = check(!started, "malformed WAV does not start") &&
+           check(snapshot.state == media::PlaybackState::Error, "parse error remains Error") &&
            check(!snapshot.error.empty(), "parse error is exposed") &&
            check(sink.events.empty(), "parse failure never opens sink");
+    controller.stop();
+    return failed && check(controller.snapshot().state == media::PlaybackState::Idle,
+                           "explicit stop clears Error") &&
+           check(controller.snapshot().error.empty(), "explicit stop clears error text");
 }
 
 bool test_short_write_retries_pending_samples_without_gaps() {
@@ -285,10 +289,10 @@ bool test_open_failure_flushes_and_closes() {
     const bool started = controller.start();
     const auto snapshot = controller.snapshot();
     return check(!started, "open failure does not start") &&
-           check(snapshot.state == media::PlaybackState::Idle, "open failure returns Idle") &&
+           check(snapshot.state == media::PlaybackState::Error, "open failure remains Error") &&
            check(!snapshot.error.empty(), "open failure is exposed as error") &&
-           check(sink.events == std::vector<Event>{Event::Open, Event::Flush, Event::Close},
-                 "failed open still flushes then closes") &&
+           check(sink.events == std::vector<Event>{Event::Open},
+                 "failed open does not flush or close unopened sink") &&
            check(sink.requested_frames.empty(), "failed open never writes PCM");
 }
 

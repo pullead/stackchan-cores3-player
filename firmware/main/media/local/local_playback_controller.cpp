@@ -6,7 +6,8 @@
 
 namespace media {
 
-LocalPlaybackController::LocalPlaybackController(AudioSink& sink) : sink_(sink) {}
+LocalPlaybackController::LocalPlaybackController(AudioSink& sink, MediaModeController* mode)
+    : sink_(sink), mode_(mode) {}
 
 void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav_bytes) {
     stop();
@@ -43,6 +44,10 @@ bool LocalPlaybackController::start() {
     }
 
     error_.clear();
+    if (mode_ && !mode_->enter_media({})) {
+        error_ = "Media audio ownership unavailable";
+        return false;
+    }
     total_frames_ = 0;
     played_frames_ = 0;
     pending_pcm_.clear();
@@ -81,7 +86,7 @@ bool LocalPlaybackController::start() {
     }
     state_machine_.transition(PlaybackState::Buffering);
     if (!sink_.open(sink_format)) {
-        sink_open_ = true;
+        sink_open_ = false;
         fail("Audio sink open failed");
         return false;
     }
@@ -146,6 +151,11 @@ void LocalPlaybackController::pump() {
         return;
     }
     played_frames_ += written;
+    if (pcm_tap_) {
+        // Observation is deliberately after sink admission and never gates
+        // playback; a full tap only increments its drop counter.
+        pcm_tap_->push(pending_pcm_.data() + pending_offset_, written);
+    }
     pending_offset_ += written;
     if (pending_offset_ != pending_pcm_.size()) {
         return;
@@ -160,6 +170,7 @@ void LocalPlaybackController::pump() {
 
 void LocalPlaybackController::stop() {
     stop_pipeline();
+    error_.clear();
 }
 
 void LocalPlaybackController::stop_for_ai() {
@@ -190,6 +201,9 @@ void LocalPlaybackController::fail(std::string error) {
     error_ = std::move(error);
     state_machine_.transition(PlaybackState::Error);
     stop_pipeline();
+    // stop_pipeline() deliberately releases the sink and media ownership;
+    // retain the diagnostic state after cleanup for the UI and caller.
+    state_machine_.mark_error();
 }
 
 void LocalPlaybackController::stop_pipeline() {
@@ -205,6 +219,7 @@ void LocalPlaybackController::stop_pipeline() {
         state_machine_.transition(PlaybackState::Stopping);
     }
     close_sink();
+    if (mode_ && mode_->media_owned()) mode_->leave_media();
     state_machine_.transition(PlaybackState::Idle);
 }
 

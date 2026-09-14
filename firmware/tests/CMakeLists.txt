@@ -185,3 +185,19 @@ add_executable(hifi_decoder_adapter_test
 target_include_directories(hifi_decoder_adapter_test PRIVATE ../main)
 target_compile_features(hifi_decoder_adapter_test PRIVATE cxx_std_17)
 add_test(NAME hifi_decoder_adapter_test COMMAND $<TARGET_FILE:hifi_decoder_adapter_test>)
+
+add_executable(media_mode_transition_test
+    media_mode_transition_test.cpp
+    ../main/media/media_mode_controller.cpp
+)
+target_include_directories(media_mode_transition_test PRIVATE ../main)
+target_compile_features(media_mode_transition_test PRIVATE cxx_std_17)
+add_test(NAME media_mode_transition_test COMMAND $<TARGET_FILE:media_mode_transition_test>)
+
+add_executable(pcm_tap_test
+    pcm_tap_test.cpp
+    ../main/media/audio/pcm_tap.cpp
+)
+target_include_directories(pcm_tap_test PRIVATE ../main)
+target_compile_features(pcm_tap_test PRIVATE cxx_std_17)
+add_test(NAME pcm_tap_test COMMAND $<TARGET_FILE:pcm_tap_test>)

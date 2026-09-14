@@ -136,3 +136,16 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 - 真实 `ESP32-audioI2S` backend 仍需取得并审计精确依赖版本、接入 ESP-IDF 构建，然后再进行静音刷写和 COM6 设备验证。
 - 本轮没有修改用户未提交的 `firmware/dependencies.lock`；SD 卡内容、音乐和歌词文件不会上传。
 - 当前阶段不宣称 MP3/AAC/FLAC 已经可以播放；完成真实 backend 后再进行本地音乐播放和频谱模块接入。
+
+## 2026-09-14：媒体所有权与频谱采样边界完成
+
+继续执行 Phase 1 Task 6：
+
+- 新增媒体/AI 音频所有权控制边界。进入媒体模式时保存真实 AI 快照、释放 AI 音频所有权并强制静音；退出媒体模式时恢复快照。重复进入/退出具备幂等语义，失败清理不会遗留媒体所有权。
+- 新增原子 SPSC `PcmTap` 环形缓冲区。频谱观察数据满载时只丢弃并累计计数，不阻塞音频 writer；FFT 计算仍留在消费者侧，不进入音频写入任务。
+- 播放失败清理后保留 `PlaybackState::Error` 和错误文本；显式 `stop()` 或重新选择曲目后才清除错误并回到干净 `Idle`。
+- 修复 sink 打开失败状态、错误清理、ownership 释放和立体声 downmix 相关边界测试。
+
+对应提交：`c96d24b`、`c4efaf0`、`8e1ae02`、`8295872`、`df3e0f7`。
+
+仍未完成：真实 `ESP32-audioI2S` backend 的固定版本接入，以及 Phase 1 完整 ESP-IDF 编译、COM6 静音刷写和设备回归。当前没有执行任何未授权的 SD 写入或音量提升。
