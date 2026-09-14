@@ -17,6 +17,8 @@ namespace media {
 struct LocalPlaybackSnapshot {
     PlaybackState state = PlaybackState::Idle;
     std::string title;
+    // Streaming decoders report 0 because duration is not known without
+    // buffering/scanning the compressed source.
     size_t total_frames = 0;
     size_t played_frames = 0;
     std::string error;
