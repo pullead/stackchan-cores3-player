@@ -22,20 +22,20 @@ public:
     media::AudioStreamStatus seek(uint64_t offset) noexcept override {
         if (closed_) return media::AudioStreamStatus::Closed;
         if (offset > bytes_.size()) return media::AudioStreamStatus::OutOfRange;
-        position_ = static_cast<size_t>(offset); return media::AudioStreamStatus::Ok;
+        position_ = static_cast<std::size_t>(offset); return media::AudioStreamStatus::Ok;
     }
     uint64_t tell() const noexcept override { return closed_ ? 0 : position_; }
     uint64_t size() const noexcept override { return closed_ ? 0 : bytes_.size(); }
     bool is_open() const noexcept override { return !closed_; }
     media::AudioStreamStatus close() noexcept override { closed_ = true; return media::AudioStreamStatus::Ok; }
 private:
-    std::vector<uint8_t> bytes_; size_t position_ = 0; bool closed_ = false;
+    std::vector<uint8_t> bytes_; std::size_t position_ = 0; bool closed_ = false;
 };
 }
 
 int main() {
     FakeStream stream({1, 2, 3});
-    uint8_t buffer[2]{}; size_t count = 0;
+    uint8_t buffer[2]{}; std::size_t count = 0;
     assert(stream.is_open());
     assert(stream.read(nullptr, sizeof(buffer), count) == media::AudioStreamStatus::InvalidArgument);
     assert(stream.read(buffer, 0, count) == media::AudioStreamStatus::InvalidArgument);
