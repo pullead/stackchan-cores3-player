@@ -87,7 +87,9 @@ bool LocalPlaybackController::start() {
         return false;
     }
 
-    sink_open_ = true;
+    // Compressed streams open the sink after the first decoded frame reveals
+    // their PCM format; WAV has already opened it above.
+    sink_open_ = !decoder_;
     state_machine_.transition(decoder_ ? PlaybackState::Buffering : PlaybackState::Playing);
     return true;
 }
