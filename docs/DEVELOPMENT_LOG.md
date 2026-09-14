@@ -156,3 +156,11 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 因此本阶段没有把未审计的 moving branch 或无法验证的源码冒充成真实 MP3 backend。`hifi_decoder_adapter` 继续保持显式 build gate：只有定义 `CONFIG_STACKCHAN_HIFI_AUDIOI2S_BACKEND` 且提供 `STACKCHAN_AUDIOI2S_BACKEND_TARGET` 时才允许接入；默认构建返回空 backend，避免“假播放成功”。新增 `docs/ESP32_AUDIOI2S_BACKEND_PROVENANCE.md`，记录接口约束、许可证/来源和可复现接入条件。
 
 当前结论：真实 MP3 fixture/integration test 仍需在取得并审计不可变 dependency SHA 后进行；本轮不修改 SD 内容、不改变音量，也不修改用户未提交的 `firmware/dependencies.lock`。
+
+### 补充审计：已有固定 Espressif MP3 解码器
+
+检查发现仓库现有 `espressif/esp_audio_codec` 2.4.1 已包含 MP3 decoder，不必把 Arduino `ESP32-audioI2S` 整个运行时移入 StackChan。组件来源在 `firmware/managed_components/espressif__esp_audio_codec/idf_component.yml` 固定为 `4d5cbe02f59fb45e40112d63317a8ddd00019cd4`，且 `firmware/dependencies.lock` 已记录该组件。
+
+证据：`include/decoder/impl/esp_mp3_dec.h` 提供 `esp_mp3_dec_open/decode/reset/close`，`esp_audio_dec.h` 的 common API 使用调用者提供的编码输入缓冲和 PCM 输出缓冲；ESP32-S3 预编译库已经存在。该 API 是 frame-oriented，需要新增薄适配层把 `AudioStream` 的增量读取、输入缓冲、metadata 和错误状态接到 `AudioDecoder`，但不会创建 I2S、AudioSink 或改变音量。
+
+该组件头文件含 Espressif Modified MIT/MIT 许可证说明，目标硬件是 Espressif CoreS3；实现时优先链接已管理组件，不复制第三方实现源码。真实 MP3 fixture 测试应在适配层完成后加入。
