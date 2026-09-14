@@ -43,4 +43,9 @@ private:
     bool opened_ = false;
 };
 
+// Returns a backend only when the separately vendored ESP32-audioI2S
+// integration is enabled.  The default build returns nullptr rather than
+// pretending that compressed audio was decoded.
+HifiDecoderBackend* create_hifi_decoder_backend() noexcept;
+
 }  // namespace media
