@@ -319,11 +319,13 @@ bool test_decoder_stream_route_writes_bounded_pcm_and_closes() {
     media::LocalPlaybackController controller(sink);
     controller.select("demo.mp3", std::unique_ptr<media::AudioStream>(stream),
                       std::unique_ptr<media::AudioDecoder>(decoder));
-    if (!check(controller.start(), "decoder route starts") || !check(decoder->opened, "decoder opens stream")) return false;
+    if (!check(controller.start(), "decoder route starts") || !check(decoder->opened, "decoder opens stream") ||
+        !check(sink.events.empty(), "compressed route defers sink open")) return false;
     controller.pump();
     const auto playing = controller.snapshot();
     if (!check(playing.state == media::PlaybackState::Playing, "decoded PCM is playing") ||
         !check(playing.played_frames == 2, "decoded frames reach sink") ||
+        !check(sink.events.front() == Event::Open, "sink opens after first decoded frame") ||
         !check(sink.written_pcm[0] == std::vector<int16_t>{11, 22}, "decoded PCM is preserved")) return false;
     controller.pump();
     return check(controller.snapshot().state == media::PlaybackState::Idle, "decoder EOF returns idle") &&
@@ -344,7 +346,7 @@ bool test_decoder_error_closes_everything_without_writing() {
            check(!controller.snapshot().error.empty(), "decoder error is exposed") &&
            check(stream->closed, "decoder error closes stream") &&
            check(sink.requested_frames.empty(), "decoder error writes no PCM") &&
-           check(sink.events == std::vector<Event>{Event::Open, Event::Flush, Event::Close}, "decoder error closes sink");
+           check(sink.events.empty(), "decoder error before first frame does not open sink");
 }
 
 bool test_decoder_stop_closes_stream_and_sink() {
@@ -357,7 +359,7 @@ bool test_decoder_stop_closes_stream_and_sink() {
     if (!check(controller.start(), "stop fixture starts")) return false;
     controller.stop();
     return check(stream->closed, "stop closes stream") &&
-           check(sink.events == std::vector<Event>{Event::Open, Event::Flush, Event::Close}, "stop closes sink");
+           check(sink.events.empty(), "stop before first frame does not close unopened sink");
 }
 
 bool test_invalid_decoder_block_is_rejected_without_writing() {
@@ -384,10 +386,10 @@ bool test_stereo_decoder_is_downmixed_to_mono() {
     media::LocalPlaybackController controller(sink);
     controller.select("stereo.mp3", std::unique_ptr<media::AudioStream>(stream),
                       std::unique_ptr<media::AudioDecoder>(decoder));
-    if (!check(controller.start(), "stereo fixture starts") ||
-        !check(sink.opened_format.channels == 1, "stereo sink opens as mono")) return false;
+    if (!check(controller.start(), "stereo fixture starts") || !check(sink.events.empty(), "stereo sink deferred")) return false;
     controller.pump();
-    return check(sink.written_pcm[0] == std::vector<int16_t>{15, 40}, "stereo is downmixed") &&
+    return check(sink.opened_format.channels == 1, "stereo sink opens as mono") &&
+           check(sink.written_pcm[0] == std::vector<int16_t>{15, 40}, "stereo is downmixed") &&
            check(controller.snapshot().total_frames == 0, "streaming duration remains unknown");
 }
 
