@@ -149,3 +149,10 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 对应提交：`c96d24b`、`c4efaf0`、`8e1ae02`、`8295872`、`df3e0f7`。
 
 仍未完成：真实 `ESP32-audioI2S` backend 的固定版本接入，以及 Phase 1 完整 ESP-IDF 编译、COM6 静音刷写和设备回归。当前没有执行任何未授权的 SD 写入或音量提升。
+## 2026-09-14 — Real ESP32-audioI2S backend gate
+
+本阶段完成了真实解码 backend 的依赖审计边界。最新 `esp32-hifi` 主分支为 `1b9185e`，其 PlatformIO 声明使用未固定的 `ESP32-audioI2S` Git URL。该库的常规 `Audio` API 同时接管 Arduino FS 和 I2S 输出，不能直接塞入 CoreS3 的只读 `SdAudioStream`，否则会绕过 GPIO35/SPI3 显示让渡并产生第二个音频所有者。
+
+因此本阶段没有把未审计的 moving branch 或无法验证的源码冒充成真实 MP3 backend。`hifi_decoder_adapter` 继续保持显式 build gate：只有定义 `CONFIG_STACKCHAN_HIFI_AUDIOI2S_BACKEND` 且提供 `STACKCHAN_AUDIOI2S_BACKEND_TARGET` 时才允许接入；默认构建返回空 backend，避免“假播放成功”。新增 `docs/ESP32_AUDIOI2S_BACKEND_PROVENANCE.md`，记录接口约束、许可证/来源和可复现接入条件。
+
+当前结论：真实 MP3 fixture/integration test 仍需在取得并审计不可变 dependency SHA 后进行；本轮不修改 SD 内容、不改变音量，也不修改用户未提交的 `firmware/dependencies.lock`。
