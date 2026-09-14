@@ -78,6 +78,8 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 - 本地音乐页面已经能够发现 HiFi 卡 `/audiofiles` 下的 MP3 曲目。
 - 真实长文件名配置已进入生成的 `sdkconfig.h`：`CONFIG_FATFS_LFN_HEAP=1`、`CONFIG_FATFS_API_ENCODING_UTF_8=1`。
 - 主固件镜像已成功完成应用链接、资源生成和镜像尺寸检查，产物为 `firmware/build-diagnostic-idf/stack-chan.bin`。
+- 2026-09-14：根据设备回归反馈，将本地音乐列表、曲目数量和状态提示从 Montserrat 切换为固件已有的 `font_puhui_14_1`，修复中文/日文 glyph 缺失导致只看到英文片段（例如类似 `UTADA123`）的问题。
+- 2026-09-14：CJK 字体版本已刷写 COM6；bootloader、主固件、分区表和资源分区均通过 `esptool verify_flash`，启动日志再次确认音量为 0% 且 SD browse-only mount ready。
 
 ### 暂未完成
 
