@@ -28,6 +28,7 @@ private:
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> heading_;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> detail_;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> track_list_;
-    std::vector<std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label>> track_rows_;
+    std::vector<std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button>> track_rows_;
+    std::vector<media::SdTrack> tracks_;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button> back_;
 };
