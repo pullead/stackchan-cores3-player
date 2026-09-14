@@ -200,6 +200,9 @@ void LocalPlaybackController::fail(std::string error) {
     error_ = std::move(error);
     state_machine_.transition(PlaybackState::Error);
     stop_pipeline();
+    // stop_pipeline() deliberately releases the sink and media ownership;
+    // retain the diagnostic state after cleanup for the UI and caller.
+    state_machine_.mark_error();
 }
 
 void LocalPlaybackController::stop_pipeline() {

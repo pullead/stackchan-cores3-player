@@ -201,7 +201,7 @@ bool test_malformed_selection_never_opens_sink() {
     const auto started = controller.start();
     const auto snapshot = controller.snapshot();
     return check(!started, "malformed WAV does not start") &&
-           check(snapshot.state == media::PlaybackState::Idle, "parse error returns Idle") &&
+           check(snapshot.state == media::PlaybackState::Error, "parse error remains Error") &&
            check(!snapshot.error.empty(), "parse error is exposed") &&
            check(sink.events.empty(), "parse failure never opens sink");
 }
