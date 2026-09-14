@@ -5,6 +5,7 @@
 #include "media/decoder/audio_stream.h"
 #include "media/local/wav_reader.h"
 #include "media/media_state_machine.h"
+#include "media/audio/pcm_tap.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -42,6 +43,7 @@ public:
     void pump();
     void stop();
     void stop_for_ai();
+    void set_pcm_tap(PcmTap* tap) noexcept { pcm_tap_ = tap; }
     LocalPlaybackSnapshot snapshot() const;
 
 private:
@@ -64,6 +66,7 @@ private:
     bool decoder_eof_ = false;
     std::string error_;
     bool sink_open_ = false;
+    PcmTap* pcm_tap_ = nullptr;
 };
 
 }  // namespace media

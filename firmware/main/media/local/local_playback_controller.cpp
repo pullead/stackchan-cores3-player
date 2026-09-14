@@ -146,6 +146,11 @@ void LocalPlaybackController::pump() {
         return;
     }
     played_frames_ += written;
+    if (pcm_tap_) {
+        // Observation is deliberately after sink admission and never gates
+        // playback; a full tap only increments its drop counter.
+        pcm_tap_->push(pending_pcm_.data() + pending_offset_, written);
+    }
     pending_offset_ += written;
     if (pending_offset_ != pending_pcm_.size()) {
         return;
