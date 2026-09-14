@@ -1,6 +1,8 @@
 #include "app_local_music.h"
 
 #include <assets/assets.h>
+#include <audio/audio_codec.h>
+#include <board.h>
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
 #include <media/decoder/hifi_decoder_adapter.h>
@@ -38,6 +40,16 @@ void AppLocalMusic::onOpen() {
     mclog::tagInfo(getAppInfo().name, "on open");
     GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
 
+    auto& board = Board::GetInstance();
+    auto* codec = board.GetAudioCodec();
+    if (codec != nullptr) {
+        codec_port_ = std::make_unique<media::BoardAudioCodecPort>(*codec);
+        speaker_sink_ = std::make_unique<media::CoreS3SpeakerSink>(*codec_port_);
+        playback_ = std::make_unique<media::LocalPlaybackController>(*speaker_sink_);
+    } else {
+        mclog::tagError(getAppInfo().name, "audio codec unavailable");
+    }
+
     {
         LvglLockGuard lock;
         create_view();
@@ -53,14 +65,30 @@ void AppLocalMusic::onOpen() {
     render(view);
 }
 
-void AppLocalMusic::onRunning() {}
+void AppLocalMusic::onRunning() {
+    if (!playback_) {
+        return;
+    }
+
+    playback_->pump();
+    if (playback_view_ && detail_) {
+        LvglLockGuard lock;
+        detail_->setText(playback_status());
+    }
+}
 
 void AppLocalMusic::onClose() {
     mclog::tagInfo(getAppInfo().name, "on close");
+    if (playback_) {
+        playback_->stop();
+    }
     GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
 
     LvglLockGuard lock;
     back_.reset();
+    playback_note_.reset();
+    playback_progress_.reset();
+    playback_name_.reset();
     track_rows_.clear();
     track_list_.reset();
     tracks_.clear();
@@ -70,6 +98,9 @@ void AppLocalMusic::onClose() {
     panel_.reset();
     playback_view_ = false;
     selected_title_.clear();
+    playback_.reset();
+    speaker_sink_.reset();
+    codec_port_.reset();
 }
 
 void AppLocalMusic::create_view() {
@@ -161,13 +192,19 @@ void AppLocalMusic::render(const local_music::BrowseView& view) {
             // the optional compressed-audio backend is absent.
             auto stream = sd_card_.open_track(tracks_[index]);
             auto* backend = media::create_hifi_decoder_backend();
-            if (!stream || backend == nullptr) {
+            if (!stream || backend == nullptr || !playback_) {
                 render_playback(selected_title_, "DECODER UNAVAILABLE / MUTED");
                 return;
             }
-            // Backend wiring is intentionally gated until a real AudioSink
-            // owner is supplied by the board integration.
-            render_playback(selected_title_, "DECODER READY / PLAYBACK PENDING");
+
+            auto decoder = std::make_unique<media::HifiDecoderAdapter>(*backend);
+            playback_->select(selected_title_, std::move(stream), std::move(decoder));
+            if (!playback_->start()) {
+                render_playback(selected_title_, playback_status());
+                return;
+            }
+
+            render_playback(selected_title_, playback_status());
         });
         track_rows_.push_back(std::move(row));
     }
@@ -175,31 +212,34 @@ void AppLocalMusic::render(const local_music::BrowseView& view) {
 
 void AppLocalMusic::render_playback(const std::string& title, const std::string& status) {
     playback_view_ = true;
+    playback_note_.reset();
+    playback_progress_.reset();
+    playback_name_.reset();
     track_rows_.clear();
     track_list_.reset();
     heading_->setText("NOW PLAYING");
     detail_->setText(status);
 
-    auto name = std::make_unique<Label>(*panel_);
-    name->setText(title);
-    name->setTextFont(&font_puhui_14_1);
-    name->setTextColor(lv_color_hex(kPrimary));
-    name->setWidth(286);
-    name->setLongMode(LV_LABEL_LONG_SCROLL_CIRCULAR);
-    name->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    name->align(LV_ALIGN_TOP_MID, 0, 78);
+    playback_name_ = std::make_unique<Label>(*panel_);
+    playback_name_->setText(title);
+    playback_name_->setTextFont(&font_puhui_14_1);
+    playback_name_->setTextColor(lv_color_hex(kPrimary));
+    playback_name_->setWidth(286);
+    playback_name_->setLongMode(LV_LABEL_LONG_SCROLL_CIRCULAR);
+    playback_name_->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    playback_name_->align(LV_ALIGN_TOP_MID, 0, 78);
 
-    auto progress = std::make_unique<Label>(*panel_);
-    progress->setText("--:-- / --:--");
-    progress->setTextFont(&lv_font_montserrat_16);
-    progress->setTextColor(lv_color_hex(kSecondary));
-    progress->align(LV_ALIGN_TOP_MID, 0, 112);
+    playback_progress_ = std::make_unique<Label>(*panel_);
+    playback_progress_->setText("--:-- / --:--");
+    playback_progress_->setTextFont(&lv_font_montserrat_16);
+    playback_progress_->setTextColor(lv_color_hex(kSecondary));
+    playback_progress_->align(LV_ALIGN_TOP_MID, 0, 112);
 
-    auto note = std::make_unique<Label>(*panel_);
-    note->setText("COVER  /  LYRICS  /  SPECTRUM PENDING");
-    note->setTextFont(&lv_font_montserrat_12);
-    note->setTextColor(lv_color_hex(kSecondary));
-    note->align(LV_ALIGN_TOP_MID, 0, 142);
+    playback_note_ = std::make_unique<Label>(*panel_);
+    playback_note_->setText("COVER  /  LYRICS  /  SPECTRUM PENDING");
+    playback_note_->setTextFont(&lv_font_montserrat_12);
+    playback_note_->setTextColor(lv_color_hex(kSecondary));
+    playback_note_->align(LV_ALIGN_TOP_MID, 0, 142);
 
     auto back = std::make_unique<Button>(*panel_);
     back->setSize(120, 34);
@@ -213,17 +253,18 @@ void AppLocalMusic::render_playback(const std::string& title, const std::string&
     back->label().setTextColor(lv_color_hex(kPrimary));
     back->onClick().connect([this]() { show_list(); });
 
-    // Keep these controls owned by the panel through LVGL; the panel owns the
-    // object tree, while the unique_ptrs are intentionally released here.
-    name.release();
-    progress.release();
-    note.release();
     back_ = std::move(back);
 }
 
 void AppLocalMusic::show_list() {
     if (!panel_) return;
+    if (playback_) {
+        playback_->stop();
+    }
     back_.reset();
+    playback_note_.reset();
+    playback_progress_.reset();
+    playback_name_.reset();
     // Recreate the list container and buttons using the already scanned tracks.
     track_list_ = std::make_unique<Container>(*panel_);
     track_list_->setSize(292, 122);
@@ -243,4 +284,35 @@ void AppLocalMusic::show_list() {
     back_->label().setText("BACK");
     back_->onClick().connect([this]() { close(); });
     render(local_music::make_browse_view(tracks_, sd_card_.last_error()));
+}
+
+std::string AppLocalMusic::playback_status() const {
+    if (!playback_) {
+        return "AUDIO UNAVAILABLE / MUTED";
+    }
+
+    const auto snapshot = playback_->snapshot();
+    if (!snapshot.error.empty()) {
+        return snapshot.error + " / MUTED";
+    }
+
+    switch (snapshot.state) {
+        case media::PlaybackState::Preparing:
+            return "PREPARING / MUTED";
+        case media::PlaybackState::Buffering:
+            return "BUFFERING / MUTED";
+        case media::PlaybackState::Playing:
+            return "PLAYING / MUTED";
+        case media::PlaybackState::Paused:
+            return "PAUSED / MUTED";
+        case media::PlaybackState::PreparingForAi:
+            return "AI HANDOFF / MUTED";
+        case media::PlaybackState::Stopping:
+            return "STOPPING / MUTED";
+        case media::PlaybackState::Error:
+            return "PLAYBACK ERROR / MUTED";
+        case media::PlaybackState::Idle:
+        default:
+            return "IDLE / MUTED";
+    }
 }
