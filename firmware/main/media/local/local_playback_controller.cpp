@@ -6,7 +6,8 @@
 
 namespace media {
 
-LocalPlaybackController::LocalPlaybackController(AudioSink& sink) : sink_(sink) {}
+LocalPlaybackController::LocalPlaybackController(AudioSink& sink, MediaModeController* mode)
+    : sink_(sink), mode_(mode) {}
 
 void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav_bytes) {
     stop();
@@ -43,6 +44,10 @@ bool LocalPlaybackController::start() {
     }
 
     error_.clear();
+    if (mode_ && !mode_->enter_media({true, false, true, true})) {
+        error_ = "Media audio ownership unavailable";
+        return false;
+    }
     total_frames_ = 0;
     played_frames_ = 0;
     pending_pcm_.clear();
@@ -210,6 +215,7 @@ void LocalPlaybackController::stop_pipeline() {
         state_machine_.transition(PlaybackState::Stopping);
     }
     close_sink();
+    if (mode_ && mode_->media_owned()) mode_->leave_media();
     state_machine_.transition(PlaybackState::Idle);
 }
 

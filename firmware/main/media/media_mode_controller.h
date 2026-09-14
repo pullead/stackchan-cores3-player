@@ -11,16 +11,26 @@ struct AiModeSnapshot {
     bool servos_enabled = true;
 };
 
+class MediaAudioOwnership {
+public:
+    virtual ~MediaAudioOwnership() = default;
+    virtual void stop_ai_audio_and_release() noexcept = 0;
+    virtual void restore_ai_state(const AiModeSnapshot& state) noexcept = 0;
+    virtual void force_output_muted() noexcept = 0;
+};
+
 class MediaModeController {
 public:
     bool enter_media(const AiModeSnapshot& ai) noexcept;
     AiModeSnapshot leave_media() noexcept;
     bool media_owned() const noexcept { return media_owned_; }
     const AiModeSnapshot& saved_ai() const noexcept { return saved_ai_; }
+    void set_ownership(MediaAudioOwnership* ownership) noexcept { ownership_ = ownership; }
 
 private:
     bool media_owned_ = false;
     AiModeSnapshot saved_ai_{};
+    MediaAudioOwnership* ownership_ = nullptr;
 };
 
 }  // namespace media

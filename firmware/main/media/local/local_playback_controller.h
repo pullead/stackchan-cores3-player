@@ -6,6 +6,7 @@
 #include "media/local/wav_reader.h"
 #include "media/media_state_machine.h"
 #include "media/audio/pcm_tap.h"
+#include "media/media_mode_controller.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -30,7 +31,7 @@ class LocalPlaybackController {
 public:
     static constexpr size_t kPlaybackChunkFrames = 1024;
 
-    explicit LocalPlaybackController(AudioSink& sink);
+    explicit LocalPlaybackController(AudioSink& sink, MediaModeController* mode = nullptr);
     LocalPlaybackController(const LocalPlaybackController&) = delete;
     LocalPlaybackController& operator=(const LocalPlaybackController&) = delete;
     LocalPlaybackController(LocalPlaybackController&&) = delete;
@@ -54,6 +55,7 @@ private:
 
     AudioSink& sink_;
     MediaStateMachine state_machine_;
+    MediaModeController* mode_ = nullptr;
     WavReader reader_;
     std::unique_ptr<AudioStream> stream_;
     std::unique_ptr<AudioDecoder> decoder_;

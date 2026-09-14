@@ -5,8 +5,11 @@
 
 namespace media {
 
-// A bounded, non-blocking PCM observation point. The writer never waits for
-// a consumer; overflow is observable and may be used by a future FFT task.
+// A bounded, non-blocking PCM observation point. The intended use is one
+// producer (the audio writer) and one consumer (a future FFT task). The
+// current API is called from the same media task; a concurrent integration
+// must provide SPSC scheduling/ordering around push/pop. The writer never
+// waits for a consumer; overflow is observable.
 class PcmTap {
 public:
     static constexpr size_t kCapacity = 2048;
