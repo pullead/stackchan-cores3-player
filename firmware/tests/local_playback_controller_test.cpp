@@ -380,7 +380,8 @@ bool test_stereo_decoder_is_downmixed_to_mono() {
     media::LocalPlaybackController controller(sink);
     controller.select("stereo.mp3", std::unique_ptr<media::AudioStream>(stream),
                       std::unique_ptr<media::AudioDecoder>(decoder));
-    if (!check(controller.start(), "stereo fixture starts")) return false;
+    if (!check(controller.start(), "stereo fixture starts") ||
+        !check(sink.opened_format.channels == 1, "stereo sink opens as mono")) return false;
     controller.pump();
     return check(sink.written_pcm[0] == std::vector<int16_t>{15, 40}, "stereo is downmixed") &&
            check(controller.snapshot().total_frames == 0, "streaming duration remains unknown");

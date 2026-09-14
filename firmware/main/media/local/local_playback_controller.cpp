@@ -49,6 +49,7 @@ bool LocalPlaybackController::start() {
     pending_offset_ = 0;
     state_machine_.transition(PlaybackState::Preparing);
     PcmFormat format{};
+    PcmFormat sink_format{};
     if (decoder_) {
         if (!stream_->is_open()) {
             fail("Audio stream is not open");
@@ -63,6 +64,8 @@ bool LocalPlaybackController::start() {
             fail("Unsupported decoded PCM format");
             return false;
         }
+        sink_format = format;
+        if (format.channels == 2) sink_format.channels = 1;
     } else {
         if (!reader_.open(selected_bytes_)) {
             fail("Invalid or unsupported WAV");
@@ -74,9 +77,10 @@ bool LocalPlaybackController::start() {
         }
         total_frames_ = reader_.remaining_frames();
         format = reader_.format();
+        sink_format = format;
     }
     state_machine_.transition(PlaybackState::Buffering);
-    if (!sink_.open(format)) {
+    if (!sink_.open(sink_format)) {
         sink_open_ = true;
         fail("Audio sink open failed");
         return false;
