@@ -18,6 +18,8 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES
     "stackchan/*.cc"
     "stackchan/*.cpp"
 )
+# Decoder adapters are included by the media glob above; keep this comment as
+# a dependency boundary: no Arduino Audio/I2S implementation is linked here.
 set(STACK_CHAN_INCLUDE_DIRS 
     "."
 )

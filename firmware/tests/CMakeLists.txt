@@ -177,3 +177,11 @@ add_executable(sd_audio_stream_test
 target_include_directories(sd_audio_stream_test PRIVATE ../main)
 target_compile_features(sd_audio_stream_test PRIVATE cxx_std_17)
 add_test(NAME sd_audio_stream_test COMMAND $<TARGET_FILE:sd_audio_stream_test>)
+
+add_executable(hifi_decoder_adapter_test
+    hifi_decoder_adapter_test.cpp
+    ../main/media/decoder/hifi_decoder_adapter.cpp
+)
+target_include_directories(hifi_decoder_adapter_test PRIVATE ../main)
+target_compile_features(hifi_decoder_adapter_test PRIVATE cxx_std_17)
+add_test(NAME hifi_decoder_adapter_test COMMAND $<TARGET_FILE:hifi_decoder_adapter_test>)
