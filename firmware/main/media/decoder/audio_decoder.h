@@ -11,8 +11,8 @@ namespace media {
 
 struct PcmBlock {
     int16_t* samples = nullptr;
-    size_t capacity_frames = 0;
-    size_t frames = 0;
+    std::size_t capacity_frames = 0;
+    std::size_t frames = 0;
 
     bool valid() const noexcept {
         return samples != nullptr && capacity_frames > 0 && frames <= capacity_frames;

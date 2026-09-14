@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -10,7 +11,7 @@ namespace {
 class FakeStream final : public media::AudioStream {
 public:
     explicit FakeStream(std::vector<uint8_t> bytes) : bytes_(std::move(bytes)) {}
-    media::AudioStreamStatus read(uint8_t* dst, size_t capacity, size_t& count) noexcept override {
+    media::AudioStreamStatus read(uint8_t* dst, std::size_t capacity, std::size_t& count) noexcept override {
         if (closed_) { count = 0; return media::AudioStreamStatus::Closed; }
         if (!dst || capacity == 0) { count = 0; return media::AudioStreamStatus::InvalidArgument; }
         count = std::min(capacity, bytes_.size() - position_);
@@ -45,6 +46,7 @@ int main() {
     assert(stream.read(buffer, sizeof(buffer), count) == media::AudioStreamStatus::Eof && count == 0);
     assert(stream.seek(1) == media::AudioStreamStatus::Ok && stream.tell() == 1);
     assert(stream.seek(4) == media::AudioStreamStatus::OutOfRange);
+    assert(stream.close() == media::AudioStreamStatus::Ok && !stream.is_open());
     assert(stream.close() == media::AudioStreamStatus::Ok && !stream.is_open());
     assert(stream.read(buffer, sizeof(buffer), count) == media::AudioStreamStatus::Closed);
     assert(stream.seek(0) == media::AudioStreamStatus::Closed);

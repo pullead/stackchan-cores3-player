@@ -22,13 +22,13 @@ public:
     virtual ~AudioStream() = default;
 
     virtual AudioStreamStatus read(uint8_t* destination,
-                                   size_t capacity,
-                                   size_t& bytes_read) noexcept = 0;
+                                   std::size_t capacity,
+                                   std::size_t& bytes_read) noexcept = 0;
     virtual AudioStreamStatus seek(uint64_t offset) noexcept = 0;
     virtual uint64_t tell() const noexcept = 0;
     virtual uint64_t size() const noexcept = 0;
-    // After close(), is_open() is false and all operations return Closed;
-    // tell()/size() return zero.
+    // close() is idempotent and returns Ok on repeated calls. After close(),
+    // is_open() is false, read()/seek() return Closed, and tell()/size() are 0.
     virtual bool is_open() const noexcept = 0;
     virtual AudioStreamStatus close() noexcept = 0;
 };
