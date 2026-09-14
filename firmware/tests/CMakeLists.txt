@@ -156,3 +156,32 @@ target_compile_features(fatfs_config_test PRIVATE cxx_std_23)
 
 add_test(NAME fatfs_config_test
     COMMAND $<TARGET_FILE:fatfs_config_test> ${CMAKE_CURRENT_SOURCE_DIR}/../sdkconfig)
+
+add_executable(audio_stream_contract_test
+    audio_stream_contract_test.cpp
+)
+
+target_include_directories(audio_stream_contract_test PRIVATE
+    ../main
+)
+
+target_compile_features(audio_stream_contract_test PRIVATE cxx_std_17)
+
+add_test(NAME audio_stream_contract_test COMMAND $<TARGET_FILE:audio_stream_contract_test>)
+
+add_executable(sd_audio_stream_test
+    sd_audio_stream_test.cpp
+    ../main/media/storage/sd_audio_stream.cpp
+    ../main/hal/board/spi3_display_handoff.cpp
+)
+target_include_directories(sd_audio_stream_test PRIVATE ../main)
+target_compile_features(sd_audio_stream_test PRIVATE cxx_std_17)
+add_test(NAME sd_audio_stream_test COMMAND $<TARGET_FILE:sd_audio_stream_test>)
+
+add_executable(hifi_decoder_adapter_test
+    hifi_decoder_adapter_test.cpp
+    ../main/media/decoder/hifi_decoder_adapter.cpp
+)
+target_include_directories(hifi_decoder_adapter_test PRIVATE ../main)
+target_compile_features(hifi_decoder_adapter_test PRIVATE cxx_std_17)
+add_test(NAME hifi_decoder_adapter_test COMMAND $<TARGET_FILE:hifi_decoder_adapter_test>)

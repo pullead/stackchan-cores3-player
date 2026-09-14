@@ -1,6 +1,7 @@
 #include "media/storage/sd_card_port.h"
 
 #include "hal/board/spi3_display_handoff.h"
+#include "media/storage/sd_audio_stream.h"
 
 namespace media {
 
@@ -75,6 +76,38 @@ const std::string& SdCardPort::last_error() const noexcept {
     return last_error_;
 }
 
+std::unique_ptr<AudioStream> SdCardPort::open_track(const SdTrack& track) {
+#ifdef ESP_PLATFORM
+    SdAudioFileOperations operations{};
+    operations.context = this;
+    operations.mount = mount_hardware;
+    operations.open = [](void*, std::string_view path, void*& handle, uint64_t& size, std::string& error) {
+        FILE* file = fopen(std::string(path).c_str(), "rb");
+        if (file == nullptr) { error = "cannot open SD audio file"; return false; }
+        if (fseek(file, 0, SEEK_END) != 0) { fclose(file); error = "cannot size SD audio file"; return false; }
+        const long end = ftell(file);
+        if (end < 0 || fseek(file, 0, SEEK_SET) != 0) { fclose(file); error = "cannot seek SD audio file"; return false; }
+        handle = file; size = static_cast<uint64_t>(end); return true;
+    };
+    operations.read = [](void*, void* handle, uint8_t* destination, std::size_t capacity, bool& io_error, std::string& error) {
+        const std::size_t count = fread(destination, 1, capacity, static_cast<FILE*>(handle));
+        io_error = ferror(static_cast<FILE*>(handle)) != 0;
+        if (io_error) error = "SD audio read failed";
+        return count;
+    };
+    operations.seek = [](void*, void* handle, uint64_t offset, std::string& error) {
+        if (offset > static_cast<uint64_t>(LONG_MAX) || fseek(static_cast<FILE*>(handle), static_cast<long>(offset), SEEK_SET) != 0) { error = "SD audio seek failed"; return false; }
+        return true;
+    };
+    operations.close = [](void*, void* handle, std::string& error) { if (fclose(static_cast<FILE*>(handle)) != 0) { error = "SD audio close failed"; return false; } return true; };
+    operations.unmount = unmount_hardware;
+    return std::make_unique<SdAudioStream>(*handoff_, operations, track.path);
+#else
+    (void)track;
+    return nullptr;
+#endif
+}
+
 bool SdCardPort::operations_ready() const noexcept {
     return operations_.mount != nullptr && operations_.list_tracks != nullptr && operations_.unmount != nullptr;
 }
@@ -97,6 +130,7 @@ void SdCardPort::append_error(std::string_view error) {
 #include <array>
 #include <cerrno>
 #include <cinttypes>
+#include <climits>
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -438,12 +472,12 @@ bool SdCardPort::unmount_hardware(void* raw_context, std::string& error) {
     }
 
     const esp_err_t result = esp_vfs_fat_sdcard_unmount(kMountPath, static_cast<sdmmc_card_t*>(port.card_));
-    port.card_ = nullptr;
     if (result != ESP_OK) {
         error = esp_err_to_name(result);
         ESP_LOGW(kTag, "TF unmount failed: %s", error.c_str());
         return false;
     }
+    port.card_ = nullptr;
     return true;
 }
 

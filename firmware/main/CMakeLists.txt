@@ -18,6 +18,8 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES
     "stackchan/*.cc"
     "stackchan/*.cpp"
 )
+# Decoder adapters are included by the media glob above; keep this comment as
+# a dependency boundary: no Arduino Audio/I2S implementation is linked here.
 set(STACK_CHAN_INCLUDE_DIRS 
     "."
 )
@@ -322,6 +324,10 @@ idf_component_register(SRCS ${SOURCES}
                         mooncake_log
                         smooth_ui_toolkit
                     )
+
+if(CONFIG_STACKCHAN_HIFI_AUDIOI2S_BACKEND AND NOT DEFINED STACKCHAN_AUDIOI2S_BACKEND_TARGET)
+    message(FATAL_ERROR "CONFIG_STACKCHAN_HIFI_AUDIOI2S_BACKEND requires STACKCHAN_AUDIOI2S_BACKEND_TARGET; ESP32-audioI2S is not vendored or enabled by default")
+endif()
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE

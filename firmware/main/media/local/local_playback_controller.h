@@ -1,6 +1,8 @@
 #pragma once
 
 #include "media/audio/audio_sink.h"
+#include "media/decoder/audio_decoder.h"
+#include "media/decoder/audio_stream.h"
 #include "media/local/wav_reader.h"
 #include "media/media_state_machine.h"
 
@@ -8,12 +10,15 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
 
 namespace media {
 
 struct LocalPlaybackSnapshot {
     PlaybackState state = PlaybackState::Idle;
     std::string title;
+    // Streaming decoders report 0 because duration is not known without
+    // buffering/scanning the compressed source.
     size_t total_frames = 0;
     size_t played_frames = 0;
     std::string error;
@@ -31,6 +36,8 @@ public:
     LocalPlaybackController& operator=(LocalPlaybackController&&) = delete;
 
     void select(std::string title, std::vector<uint8_t> wav_bytes);
+    void select(std::string title, std::unique_ptr<AudioStream> stream,
+                std::unique_ptr<AudioDecoder> decoder);
     bool start();
     void pump();
     void stop();
@@ -46,12 +53,15 @@ private:
     AudioSink& sink_;
     MediaStateMachine state_machine_;
     WavReader reader_;
+    std::unique_ptr<AudioStream> stream_;
+    std::unique_ptr<AudioDecoder> decoder_;
     std::string title_;
     std::vector<uint8_t> selected_bytes_;
     size_t total_frames_ = 0;
     size_t played_frames_ = 0;
     std::vector<int16_t> pending_pcm_;
     size_t pending_offset_ = 0;
+    bool decoder_eof_ = false;
     std::string error_;
     bool sink_open_ = false;
 };

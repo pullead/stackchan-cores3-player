@@ -3,6 +3,7 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
+#include <media/decoder/hifi_decoder_adapter.h>
 #include <mooncake_log.h>
 
 using namespace smooth_ui_toolkit::lvgl_cpp;
@@ -45,8 +46,8 @@ void AppLocalMusic::onOpen() {
 
     // browse_tracks() owns the display/SD handoff and therefore runs without an
     // application-level LVGL lock. It also unmounts before returning.
-    const auto tracks = sd_card_.browse_tracks();
-    const auto view = local_music::make_browse_view(tracks, sd_card_.last_error());
+    tracks_ = sd_card_.browse_tracks();
+    const auto view = local_music::make_browse_view(tracks_, sd_card_.last_error());
 
     LvglLockGuard lock;
     render(view);
@@ -62,6 +63,7 @@ void AppLocalMusic::onClose() {
     back_.reset();
     track_rows_.clear();
     track_list_.reset();
+    tracks_.clear();
     detail_.reset();
     heading_.reset();
     title_.reset();
@@ -130,13 +132,33 @@ void AppLocalMusic::render(const local_music::BrowseView& view) {
 
     track_rows_.clear();
     for (std::size_t index = 0; index < view.rows.size(); ++index) {
-        auto row = std::make_unique<Label>(*track_list_);
-        row->setText(std::to_string(index + 1) + ".  " + view.rows[index]);
-        row->setTextFont(&font_puhui_14_1);
-        row->setTextColor(lv_color_hex(kPrimary));
+        auto row = std::make_unique<Button>(*track_list_);
+        row->label().setText(std::to_string(index + 1) + ".  " + view.rows[index]);
+        row->label().setTextFont(&font_puhui_14_1);
+        row->label().setTextColor(lv_color_hex(kPrimary));
+        row->setBgColor(lv_color_hex(kBackground));
+        row->setBorderWidth(0);
+        row->setShadowWidth(0);
+        row->setRadius(4);
         row->setWidth(276);
-        row->setHeight(18);
-        row->setLongMode(LV_LABEL_LONG_CLIP);
+        row->setHeight(22);
+        row->onClick().connect([this, index]() {
+            const auto selected = local_music::select_track(tracks_, index);
+            if (!selected.accepted || index >= tracks_.size()) {
+                return;
+            }
+
+            // The SD stream is opened read-only.  Do not claim playback when
+            // the optional compressed-audio backend is absent.
+            auto stream = sd_card_.open_track(tracks_[index]);
+            auto* backend = media::create_hifi_decoder_backend();
+            if (!stream || backend == nullptr) {
+                render(local_music::make_decoder_unavailable_view(tracks_[index]));
+                return;
+            }
+            heading_->setText("DECODER READY");
+            detail_->setText("AUDIO PIPELINE / MUTED");
+        });
         track_rows_.push_back(std::move(row));
     }
 }

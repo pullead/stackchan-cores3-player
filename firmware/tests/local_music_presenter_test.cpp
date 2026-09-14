@@ -59,6 +59,28 @@ bool test_reports_all_visible_tracks() {
            check(view.rows == std::vector<std::string>({"A", "B"}), "all titles are shown");
 }
 
+bool test_selects_real_track_without_rewriting_utf8_title() {
+    const std::vector<media::SdTrack> tracks = {{"/sdcard/宇多田ヒカル.mp3", "宇多田ヒカル.mp3", 123}};
+    const auto result = local_music::select_track(tracks, 0);
+    return check(result.accepted, "existing track is accepted") &&
+           check(result.title == "宇多田ヒカル.mp3", "UTF-8 title is preserved") &&
+           check(result.detail == "PREPARING / MUTED", "selection remains muted");
+}
+
+bool test_rejects_out_of_range_selection() {
+    const auto result = local_music::select_track({}, 0);
+    return check(!result.accepted, "missing track is rejected") &&
+           check(result.detail == "TRACK NOT FOUND", "missing track has explicit status");
+}
+
+bool test_decoder_unavailable_is_not_fake_playback() {
+    const media::SdTrack track{"/sdcard/song.mp3", "song.mp3", 123};
+    const auto view = local_music::make_decoder_unavailable_view(track);
+    return check(view.heading == "DECODER UNAVAILABLE", "decoder failure is visible") &&
+           check(view.detail.find("NOT ENABLED") != std::string::npos, "backend status is actionable") &&
+           check(view.rows == std::vector<std::string>({"song.mp3"}), "selected title remains visible");
+}
+
 }  // namespace
 
 int main() {
@@ -68,5 +90,8 @@ int main() {
     failures += !test_reports_empty_card();
     failures += !test_preserves_all_rows_for_the_scrollable_list();
     failures += !test_reports_all_visible_tracks();
+    failures += !test_selects_real_track_without_rewriting_utf8_title();
+    failures += !test_rejects_out_of_range_selection();
+    failures += !test_decoder_unavailable_is_not_fake_playback();
     return failures == 0 ? 0 : 1;
 }

@@ -109,3 +109,30 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 - M5Stack StackChan BSP：<https://github.com/m5stack/StackChan-BSP>
 - ESP32 HiFi 参考项目：<https://github.com/pullead/esp32-hifi>
 - 本仓库基于官方开源代码和个人移植修改，未上传设备专属密钥、Wi-Fi 凭据、构建缓存或 SD 卡内容。
+
+## 2026-09-14：方案 B 第一阶段实施进度
+
+本轮按最新 `pullead/esp32-hifi` 主分支（`1b9185e`，功能基线为其父提交 `a7f57b4`）开始执行方案 B。核心原则保持不变：StackChan CoreS3 独占 I2S/AW88298，HiFi 项目的文件流、解码器和曲目控制逻辑通过窄接口移植，不直接实例化 Arduino `Audio` 对象，不抢占 AI 音频链路；SD 卡始终只读，默认音量为 0%。
+
+已完成并经过规格/质量审查的代码阶段：
+
+1. 建立 `AudioStream`、`AudioDecoder` 和 `PcmBlock` 契约，明确 EOF、关闭、错误、容量和只读语义。
+2. 将 CoreS3 SPI3 显示让渡逻辑接入 `SdAudioStream`：基于真实 `SdTrack.path` 使用 `fopen(..., "rb")`、`fread`、`fseek`、`ftell`、`fclose`；支持 UTF-8 长文件名；打开期间保持 handoff，关闭后才卸载和释放；卸载/读取/关闭错误均向上层传播。
+3. 建立 HiFi 解码器适配边界，默认构建不会伪装成 MP3 播放成功；真实 `ESP32-audioI2S` backend 通过条件编译接入，当前尚未 vendored、固定并启用，因此尚未宣称真实 MP3 已可播放。
+4. 完成流式 PCM 到 StackChan `AudioSink` 的播放桥：固定大小 PCM block、无需整曲缓存、支持 WAV 兼容路径、双声道转单声道、`EOF + 最后一批 PCM`、停止/错误/`stop_for_ai` 的确定性清理；媒体快照继续保持静音。
+5. `LOCAL MUSIC` 曲目行已连接到真实 `SdTrack` 和只读流入口，保留上下滑动、中文/日文 UTF-8 文件名；当解码 backend 未启用时显示明确的 `DECODER UNAVAILABLE` / `MP3 BACKEND NOT ENABLED / MUTED`，不会伪造播放状态。
+
+本轮提交范围：
+
+- `def09b1` 至 `1267a0c`：流与解码器契约及边界测试。
+- `dd26805` 至 `9e39fd0`：CoreS3 只读 SD 音频流、错误传播和 handoff 回归测试。
+- `4e15056` 至 `4213747`：HiFi 解码器适配边界和条件编译安全检查。
+- `388e80f` 至 `a914b87`：PCM 播放桥、停止清理、立体声 downmix 和 EOF 边界。
+- `5eb867f`：`LOCAL MUSIC` 选曲入口和 decoder unavailable 状态。
+
+验证限制与下一步：
+
+- 当前工作环境缺少可用的主机 `cmake`/`g++`/`clang++`，新增主机测试已注册但未能在本机执行；已有固件编译链仍需在 ESP-IDF 环境进行完整验证。
+- 真实 `ESP32-audioI2S` backend 仍需取得并审计精确依赖版本、接入 ESP-IDF 构建，然后再进行静音刷写和 COM6 设备验证。
+- 本轮没有修改用户未提交的 `firmware/dependencies.lock`；SD 卡内容、音乐和歌词文件不会上传。
+- 当前阶段不宣称 MP3/AAC/FLAC 已经可以播放；完成真实 backend 后再进行本地音乐播放和频谱模块接入。
