@@ -7,6 +7,11 @@
 
 using namespace smooth_ui_toolkit::lvgl_cpp;
 
+// Montserrat is intentionally kept for the compact English chrome, but it has
+// no CJK glyphs. The Puhui 14px font is already part of the firmware font
+// component and covers the UTF-8 filenames returned by FatFs.
+LV_FONT_DECLARE(font_puhui_14_1);
+
 namespace {
 
 constexpr uint32_t kBackground = 0xF1F7F5;
@@ -79,14 +84,14 @@ void AppLocalMusic::create_view() {
     title_->align(LV_ALIGN_TOP_MID, 0, 4);
 
     heading_ = std::make_unique<Label>(*panel_);
-    heading_->setTextFont(&lv_font_montserrat_16);
+    heading_->setTextFont(&font_puhui_14_1);
     heading_->setTextColor(lv_color_hex(kPrimary));
     heading_->setWidth(292);
     heading_->setTextAlign(LV_TEXT_ALIGN_CENTER);
     heading_->align(LV_ALIGN_TOP_MID, 0, 28);
 
     detail_ = std::make_unique<Label>(*panel_);
-    detail_->setTextFont(&lv_font_montserrat_14);
+    detail_->setTextFont(&font_puhui_14_1);
     detail_->setTextColor(lv_color_hex(kSecondary));
     detail_->setWidth(286);
     detail_->setLongMode(LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -127,7 +132,7 @@ void AppLocalMusic::render(const local_music::BrowseView& view) {
     for (std::size_t index = 0; index < view.rows.size(); ++index) {
         auto row = std::make_unique<Label>(*track_list_);
         row->setText(std::to_string(index + 1) + ".  " + view.rows[index]);
-        row->setTextFont(&lv_font_montserrat_14);
+        row->setTextFont(&font_puhui_14_1);
         row->setTextColor(lv_color_hex(kPrimary));
         row->setWidth(276);
         row->setHeight(18);
