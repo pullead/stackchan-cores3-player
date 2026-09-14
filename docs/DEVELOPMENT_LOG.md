@@ -97,6 +97,12 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 5. 实现媒体/AI 模式保存状态与切换，确保退出媒体模式后 AI、表情和舵机恢复。
 6. 在上述基础稳定后再移植网络电台模块，并为网络失败、无 SD 卡、解码失败提供可恢复 UI。
 
+## 2026-09-14：完整本地播放器移植方案确定
+
+用户确认采用方案 B。方案 B 不需要插入 ESP32 HiFi 开发板，最终由 StackChan CoreS3 独立完成 SD 读取、解码、PCM 输出、音乐库和频谱显示。HiFi 开发板只作为对照测试设备。
+
+详细方案见 [`docs/LOCAL_PLAYER_MIGRATION_PLAN.md`](LOCAL_PLAYER_MIGRATION_PLAN.md)。本阶段尚未开始播放器解码代码修改，先完成架构记录，避免直接把 HiFi 项目的 Arduino I2S 输出层与 StackChan 的 AI 音频链路叠加。
+
 ## 参考来源
 
 - M5Stack StackChan：<https://github.com/m5stack/StackChan>
