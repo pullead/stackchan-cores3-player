@@ -170,6 +170,7 @@ void LocalPlaybackController::pump() {
 
 void LocalPlaybackController::stop() {
     stop_pipeline();
+    error_.clear();
 }
 
 void LocalPlaybackController::stop_for_ai() {
