@@ -64,13 +64,9 @@ bool LocalPlaybackController::start() {
             fail("Audio decoder open failed");
             return false;
         }
-        format = decoder_->format();
-        if (!format.valid()) {
-            fail("Unsupported decoded PCM format");
-            return false;
-        }
-        sink_format = format;
-        if (format.channels == 2) sink_format.channels = 1;
+        // MP3 headers are parsed by the first decode call.  Do not require a
+        // valid format here: a freshly opened decoder legitimately reports an
+        // empty format until it has produced its first PCM frame.
     } else {
         if (!reader_.open(selected_bytes_)) {
             fail("Invalid or unsupported WAV");
@@ -85,23 +81,29 @@ bool LocalPlaybackController::start() {
         sink_format = format;
     }
     state_machine_.transition(PlaybackState::Buffering);
-    if (!sink_.open(sink_format)) {
+    if (!decoder_ && !sink_.open(sink_format)) {
         sink_open_ = false;
         fail("Audio sink open failed");
         return false;
     }
 
-    sink_open_ = true;
-    state_machine_.transition(PlaybackState::Playing);
+    // Compressed streams open the sink after the first decoded frame reveals
+    // their PCM format; WAV has already opened it above.
+    sink_open_ = !decoder_;
+    state_machine_.transition(decoder_ ? PlaybackState::Buffering : PlaybackState::Playing);
     return true;
 }
 
 void LocalPlaybackController::pump() {
-    if (state_machine_.state() != PlaybackState::Playing) {
+    if (state_machine_.state() != PlaybackState::Playing &&
+        state_machine_.state() != PlaybackState::Buffering) {
         return;
     }
 
     if (pending_pcm_.empty()) {
+        // Decoder contract: PcmBlock capacity is frames, while this backing
+        // array deliberately reserves up to two interleaved int16 samples per
+        // frame until the compressed header reveals mono versus stereo.
         std::array<int16_t, kPlaybackChunkFrames * 2> frames{};
         size_t frame_count = 0;
         if (decoder_) {
@@ -123,6 +125,20 @@ void LocalPlaybackController::pump() {
                 block.frames > frames.size()) {
                 fail("Audio decoder failed");
                 return;
+            }
+            if (!decoder_->format().valid()) {
+                fail("Unsupported decoded PCM format");
+                return;
+            }
+            if (!sink_open_) {
+                PcmFormat sink_format = decoder_->format();
+                if (sink_format.channels == 2) sink_format.channels = 1;
+                if (!sink_.open(sink_format)) {
+                    fail("Audio sink open failed");
+                    return;
+                }
+                sink_open_ = true;
+                state_machine_.transition(PlaybackState::Playing);
             }
             frame_count = block.frames;
             if (decoder_->format().channels == 2) {

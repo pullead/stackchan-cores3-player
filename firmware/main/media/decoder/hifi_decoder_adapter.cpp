@@ -1,5 +1,7 @@
 #include "media/decoder/hifi_decoder_adapter.h"
 
+#include "media/decoder/esp_mp3_decoder_backend.h"
+
 namespace media {
 
 AudioDecodeStatus HifiDecoderAdapter::open(AudioStream& stream) noexcept {
@@ -39,15 +41,10 @@ AudioDecodeStatus HifiDecoderAdapter::last_error() const noexcept {
 }
 
 HifiDecoderBackend* create_hifi_decoder_backend() noexcept {
-#if defined(CONFIG_STACKCHAN_HIFI_AUDIOI2S_BACKEND)
-    // The concrete ESP32-audioI2S bridge is supplied by the optional component
-    // and must implement HifiDecoderBackend. It is intentionally not linked
-    // into the default StackChan build because that library owns I2S directly.
-    extern HifiDecoderBackend* stackchan_create_audioi2s_backend() noexcept;
-    return stackchan_create_audioi2s_backend();
-#else
-    return nullptr;
-#endif
+    // The ESP-IDF decoder owns no I2S or volume state and is safe to use with
+    // StackChan's existing AudioSink.  Arduino Audio remains deliberately
+    // unsupported here because it would create a second audio owner.
+    return create_esp_mp3_decoder_backend();
 }
 
 }  // namespace media
