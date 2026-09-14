@@ -68,6 +68,8 @@ void AppLocalMusic::onClose() {
     heading_.reset();
     title_.reset();
     panel_.reset();
+    playback_view_ = false;
+    selected_title_.clear();
 }
 
 void AppLocalMusic::create_view() {
@@ -127,6 +129,7 @@ void AppLocalMusic::create_view() {
 }
 
 void AppLocalMusic::render(const local_music::BrowseView& view) {
+    playback_view_ = false;
     heading_->setText(view.heading);
     detail_->setText(view.detail);
 
@@ -148,17 +151,96 @@ void AppLocalMusic::render(const local_music::BrowseView& view) {
                 return;
             }
 
+            selected_title_ = tracks_[index].title;
+            // Always enter the player page so a selected track has a clear
+            // destination.  The page reports backend availability honestly;
+            // it must never show a fake Playing state.
+            render_playback(selected_title_, "PREPARING / MUTED");
+
             // The SD stream is opened read-only.  Do not claim playback when
             // the optional compressed-audio backend is absent.
             auto stream = sd_card_.open_track(tracks_[index]);
             auto* backend = media::create_hifi_decoder_backend();
             if (!stream || backend == nullptr) {
-                render(local_music::make_decoder_unavailable_view(tracks_[index]));
+                render_playback(selected_title_, "DECODER UNAVAILABLE / MUTED");
                 return;
             }
-            heading_->setText("DECODER READY");
-            detail_->setText("AUDIO PIPELINE / MUTED");
+            // Backend wiring is intentionally gated until a real AudioSink
+            // owner is supplied by the board integration.
+            render_playback(selected_title_, "DECODER READY / PLAYBACK PENDING");
         });
         track_rows_.push_back(std::move(row));
     }
+}
+
+void AppLocalMusic::render_playback(const std::string& title, const std::string& status) {
+    playback_view_ = true;
+    track_rows_.clear();
+    track_list_.reset();
+    heading_->setText("NOW PLAYING");
+    detail_->setText(status);
+
+    auto name = std::make_unique<Label>(*panel_);
+    name->setText(title);
+    name->setTextFont(&font_puhui_14_1);
+    name->setTextColor(lv_color_hex(kPrimary));
+    name->setWidth(286);
+    name->setLongMode(LV_LABEL_LONG_SCROLL_CIRCULAR);
+    name->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    name->align(LV_ALIGN_TOP_MID, 0, 78);
+
+    auto progress = std::make_unique<Label>(*panel_);
+    progress->setText("--:-- / --:--");
+    progress->setTextFont(&lv_font_montserrat_16);
+    progress->setTextColor(lv_color_hex(kSecondary));
+    progress->align(LV_ALIGN_TOP_MID, 0, 112);
+
+    auto note = std::make_unique<Label>(*panel_);
+    note->setText("COVER  /  LYRICS  /  SPECTRUM PENDING");
+    note->setTextFont(&lv_font_montserrat_12);
+    note->setTextColor(lv_color_hex(kSecondary));
+    note->align(LV_ALIGN_TOP_MID, 0, 142);
+
+    auto back = std::make_unique<Button>(*panel_);
+    back->setSize(120, 34);
+    back->align(LV_ALIGN_BOTTOM_MID, 0, -6);
+    back->setBgColor(lv_color_hex(kAccent));
+    back->setBorderWidth(0);
+    back->setShadowWidth(0);
+    back->setRadius(12);
+    back->label().setText("BACK TO LIST");
+    back->label().setTextFont(&lv_font_montserrat_12);
+    back->label().setTextColor(lv_color_hex(kPrimary));
+    back->onClick().connect([this]() { show_list(); });
+
+    // Keep these controls owned by the panel through LVGL; the panel owns the
+    // object tree, while the unique_ptrs are intentionally released here.
+    name.release();
+    progress.release();
+    note.release();
+    back_ = std::move(back);
+}
+
+void AppLocalMusic::show_list() {
+    if (!panel_) return;
+    back_.reset();
+    // Recreate the list container and buttons using the already scanned tracks.
+    track_list_ = std::make_unique<Container>(*panel_);
+    track_list_->setSize(292, 122);
+    track_list_->align(LV_ALIGN_TOP_MID, 0, 66);
+    track_list_->setBgOpa(LV_OPA_TRANSP);
+    track_list_->setBorderWidth(0);
+    track_list_->setRadius(0);
+    track_list_->setPadding(2, 2, 0, 0);
+    track_list_->setFlexFlow(LV_FLEX_FLOW_COLUMN);
+    track_list_->setFlexAlign(LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    track_list_->setPadRow(4);
+    track_list_->setScrollDir(LV_DIR_VER);
+    track_list_->setScrollbarMode(LV_SCROLLBAR_MODE_ACTIVE);
+    back_ = std::make_unique<Button>(*panel_);
+    back_->setSize(104, 34);
+    back_->align(LV_ALIGN_BOTTOM_MID, 0, -6);
+    back_->label().setText("BACK");
+    back_->onClick().connect([this]() { close(); });
+    render(local_music::make_browse_view(tracks_, sd_card_.last_error()));
 }

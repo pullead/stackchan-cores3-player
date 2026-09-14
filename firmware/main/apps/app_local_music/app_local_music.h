@@ -20,6 +20,8 @@ public:
 private:
     void create_view();
     void render(const local_music::BrowseView& view);
+    void render_playback(const std::string& title, const std::string& status);
+    void show_list();
 
     media::SdCardPort sd_card_;
 
@@ -31,4 +33,6 @@ private:
     std::vector<std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button>> track_rows_;
     std::vector<media::SdTrack> tracks_;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button> back_;
+    bool playback_view_ = false;
+    std::string selected_title_;
 };
