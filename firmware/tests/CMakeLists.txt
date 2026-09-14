@@ -156,3 +156,15 @@ target_compile_features(fatfs_config_test PRIVATE cxx_std_23)
 
 add_test(NAME fatfs_config_test
     COMMAND $<TARGET_FILE:fatfs_config_test> ${CMAKE_CURRENT_SOURCE_DIR}/../sdkconfig)
+
+add_executable(audio_stream_contract_test
+    audio_stream_contract_test.cpp
+)
+
+target_include_directories(audio_stream_contract_test PRIVATE
+    ../main
+)
+
+target_compile_features(audio_stream_contract_test PRIVATE cxx_std_17)
+
+add_test(NAME audio_stream_contract_test COMMAND $<TARGET_FILE:audio_stream_contract_test>)
