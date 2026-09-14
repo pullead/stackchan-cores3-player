@@ -44,7 +44,7 @@ bool LocalPlaybackController::start() {
     }
 
     error_.clear();
-    if (mode_ && !mode_->enter_media({true, false, true, true})) {
+    if (mode_ && !mode_->enter_media({})) {
         error_ = "Media audio ownership unavailable";
         return false;
     }
@@ -86,7 +86,7 @@ bool LocalPlaybackController::start() {
     }
     state_machine_.transition(PlaybackState::Buffering);
     if (!sink_.open(sink_format)) {
-        sink_open_ = true;
+        sink_open_ = false;
         fail("Audio sink open failed");
         return false;
     }

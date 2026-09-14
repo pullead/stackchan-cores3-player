@@ -17,6 +17,7 @@ public:
     virtual void stop_ai_audio_and_release() noexcept = 0;
     virtual void restore_ai_state(const AiModeSnapshot& state) noexcept = 0;
     virtual void force_output_muted() noexcept = 0;
+    virtual AiModeSnapshot capture_current_ai_state() const noexcept = 0;
 };
 
 class MediaModeController {
@@ -26,6 +27,7 @@ public:
     bool media_owned() const noexcept { return media_owned_; }
     const AiModeSnapshot& saved_ai() const noexcept { return saved_ai_; }
     void set_ownership(MediaAudioOwnership* ownership) noexcept { ownership_ = ownership; }
+    void clear_ownership() noexcept { ownership_ = nullptr; }
 
 private:
     bool media_owned_ = false;

@@ -4,7 +4,7 @@ namespace media {
 
 bool MediaModeController::enter_media(const AiModeSnapshot& ai) noexcept {
     if (media_owned_) return false;
-    saved_ai_ = ai;
+    saved_ai_ = ownership_ ? ownership_->capture_current_ai_state() : ai;
     if (ownership_) {
         ownership_->stop_ai_audio_and_release();
         ownership_->force_output_muted();
@@ -14,6 +14,7 @@ bool MediaModeController::enter_media(const AiModeSnapshot& ai) noexcept {
 }
 
 AiModeSnapshot MediaModeController::leave_media() noexcept {
+    if (!media_owned_) return {};
     const AiModeSnapshot restored = saved_ai_;
     media_owned_ = false;
     saved_ai_ = {};
