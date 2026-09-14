@@ -2,21 +2,6 @@
 
 namespace media {
 
-namespace {
-class UnavailableBackend final : public HifiDecoderBackend {
-public:
-    AudioDecodeStatus open(AudioStream&) noexcept override { return AudioDecodeStatus::Unsupported; }
-    AudioDecodeStatus decode(PcmBlock&) noexcept override { return AudioDecodeStatus::Unsupported; }
-    const PcmFormat& format() const noexcept override { return format_; }
-    const AudioMetadata& metadata() const noexcept override { return metadata_; }
-    bool eof() const noexcept override { return false; }
-    AudioDecodeStatus last_error() const noexcept override { return AudioDecodeStatus::Unsupported; }
-private:
-    PcmFormat format_{};
-    AudioMetadata metadata_{};
-};
-}
-
 AudioDecodeStatus HifiDecoderAdapter::open(AudioStream& stream) noexcept {
     if (!stream.is_open()) {
         opened_ = false;

@@ -325,6 +325,10 @@ idf_component_register(SRCS ${SOURCES}
                         smooth_ui_toolkit
                     )
 
+if(CONFIG_STACKCHAN_HIFI_AUDIOI2S_BACKEND AND NOT DEFINED STACKCHAN_AUDIOI2S_BACKEND_TARGET)
+    message(FATAL_ERROR "CONFIG_STACKCHAN_HIFI_AUDIOI2S_BACKEND requires STACKCHAN_AUDIOI2S_BACKEND_TARGET; ESP32-audioI2S is not vendored or enabled by default")
+endif()
+
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE
 if(NOT BOARD_NAME)

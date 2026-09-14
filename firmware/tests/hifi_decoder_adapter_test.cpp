@@ -21,6 +21,7 @@ public:
     AudioDecodeStatus open(AudioStream&) noexcept override { opened = true; return malformed ? AudioDecodeStatus::Malformed : AudioDecodeStatus::Ok; }
     AudioDecodeStatus decode(PcmBlock& block) noexcept override {
         if (!opened) return AudioDecodeStatus::NotOpen;
+        if (io_error) return AudioDecodeStatus::IoError;
         if (done) return AudioDecodeStatus::Eof;
         block.samples[0] = 123; block.frames = 1; done = true; return AudioDecodeStatus::Ok;
     }
@@ -28,12 +29,13 @@ public:
     const AudioMetadata& metadata() const noexcept override { return info; }
     bool eof() const noexcept override { return done; }
     AudioDecodeStatus last_error() const noexcept override { return malformed ? AudioDecodeStatus::Malformed : AudioDecodeStatus::Ok; }
-    bool opened = false, done = false, malformed = false;
+    bool opened = false, done = false, malformed = false, io_error = false;
     PcmFormat pcm{44100, 2, 16};
     AudioMetadata info{"title", "artist", "album"};
 };
 
 int main() {
+    assert(create_hifi_decoder_backend() == nullptr);
     FixtureStream stream; FixtureBackend backend; HifiDecoderAdapter decoder(backend);
     int16_t samples[2]{}; PcmBlock block{samples, 1, 0};
     assert(decoder.open(stream) == AudioDecodeStatus::Ok);
@@ -44,5 +46,19 @@ int main() {
     PcmBlock bad{nullptr, 1, 0}; assert(decoder.decode(bad) == AudioDecodeStatus::InvalidArgument);
     FixtureBackend broken; broken.malformed = true; HifiDecoderAdapter malformed(broken);
     assert(malformed.open(stream) == AudioDecodeStatus::Malformed);
+    assert(malformed.last_error() == AudioDecodeStatus::Malformed);
+    // A later successful open resets the adapter's previous failure.
+    broken.malformed = false;
+    assert(malformed.open(stream) == AudioDecodeStatus::Ok);
+    PcmBlock reopen{samples, 1, 0};
+    assert(malformed.decode(reopen) == AudioDecodeStatus::Ok);
+    // Backend I/O errors are terminal for the current stream, not EOF.
+    broken.io_error = true;
+    HifiDecoderAdapter io_adapter(broken);
+    assert(io_adapter.open(stream) == AudioDecodeStatus::Ok);
+    PcmBlock io_block{samples, 1, 0};
+    assert(io_adapter.decode(io_block) == AudioDecodeStatus::IoError);
+    assert(!io_adapter.eof());
+    assert(io_adapter.last_error() == AudioDecodeStatus::IoError);
     return 0;
 }
