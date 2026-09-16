@@ -95,6 +95,7 @@ bool LocalPlaybackController::start() {
     // their PCM format; WAV has already opened it above.
     sink_open_ = !decoder_;
     state_machine_.transition(decoder_ ? PlaybackState::Buffering : PlaybackState::Playing);
+    publish_progress();
     return true;
 }
 
@@ -147,6 +148,7 @@ void LocalPlaybackController::pump() {
                 sink_open_ = true;
                 sink_channels_ = sink_format.channels;
                 state_machine_.transition(PlaybackState::Playing);
+                publish_progress();
             }
             frame_count = block.frames;
             if (result == AudioDecodeStatus::Eof) decoder_eof_ = true;
@@ -172,6 +174,7 @@ void LocalPlaybackController::pump() {
         return;
     }
     played_frames_ += written;
+    publish_progress();
     if (pcm_tap_) {
         // Observation is deliberately after sink admission and never gates
         // playback; a full tap only increments its drop counter.  The tap
@@ -205,14 +208,11 @@ void LocalPlaybackController::stop_for_ai() {
     stop_pipeline();
 }
 
-PlaybackState LocalPlaybackController::state() const {
-    std::lock_guard<std::recursive_mutex> guard(mutex_);
-    return state_machine_.state();
-}
-
-size_t LocalPlaybackController::played_frames() const {
-    std::lock_guard<std::recursive_mutex> guard(mutex_);
-    return played_frames_;
+void LocalPlaybackController::publish_progress() noexcept {
+    state_atomic_.store(state_machine_.state(), std::memory_order_relaxed);
+    played_atomic_.store(played_frames_, std::memory_order_relaxed);
+    const PcmFormat& format = decoder_ ? decoder_->format() : reader_.format();
+    rate_atomic_.store(format.sample_rate, std::memory_order_relaxed);
 }
 
 LocalPlaybackSnapshot LocalPlaybackController::snapshot() const {
@@ -242,6 +242,7 @@ void LocalPlaybackController::fail(std::string error) {
     // stop_pipeline() deliberately releases the sink and media ownership;
     // retain the diagnostic state after cleanup for the UI and caller.
     state_machine_.mark_error();
+    publish_progress();
 }
 
 void LocalPlaybackController::stop_pipeline() {
@@ -259,6 +260,7 @@ void LocalPlaybackController::stop_pipeline() {
     close_sink();
     if (mode_ && mode_->media_owned()) mode_->leave_media();
     state_machine_.transition(PlaybackState::Idle);
+    publish_progress();
 }
 
 void LocalPlaybackController::close_sink() {

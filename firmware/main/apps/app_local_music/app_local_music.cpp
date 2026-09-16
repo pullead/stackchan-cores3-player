@@ -89,16 +89,19 @@ void AppLocalMusic::onRunning() {
         return;
     }
 
-    const media::LocalPlaybackSnapshot snapshot = playback_->snapshot();
-    const std::string status = playback_status();
+    // tick() is lock-free: taking the controller mutex here would mean waiting
+    // for the audio task to finish a whole chunk, so the clock would advance in
+    // multi-second jumps instead of smoothly.
+    const auto tick = playback_->tick();
+    const std::string status = playback_status(tick.state);
     // Elapsed time is the only on-screen evidence that a muted track is
     // actually advancing rather than stuck.
     std::string elapsed = "--:--";
-    if (snapshot.sample_rate > 0) {
-        const uint32_t seconds = snapshot.played_frames / snapshot.sample_rate;
+    if (tick.sample_rate > 0) {
+        const uint32_t seconds = tick.played_frames / tick.sample_rate;
         elapsed = std::to_string(seconds / 60) + ":" +
                   (seconds % 60 < 10 ? "0" : "") + std::to_string(seconds % 60);
-        elapsed += "  @" + std::to_string(snapshot.sample_rate) + "Hz";
+        elapsed += "  @" + std::to_string(tick.sample_rate) + "Hz";
     }
 
     if (status == shown_status_ && elapsed == shown_elapsed_) {
@@ -365,16 +368,23 @@ void AppLocalMusic::show_list() {
 }
 
 std::string AppLocalMusic::playback_status() const {
+    return playback_ ? playback_status(playback_->tick().state) : "AUDIO UNAVAILABLE / MUTED";
+}
+
+std::string AppLocalMusic::playback_status(media::PlaybackState state) const {
     if (!playback_) {
         return "AUDIO UNAVAILABLE / MUTED";
     }
 
-    const auto snapshot = playback_->snapshot();
-    if (!snapshot.error.empty()) {
-        return snapshot.error + " / MUTED";
+    // Only the error path pays for the lock: it is rare and needs the text.
+    if (state == media::PlaybackState::Error) {
+        const auto snapshot = playback_->snapshot();
+        if (!snapshot.error.empty()) {
+            return snapshot.error + " / MUTED";
+        }
     }
 
-    switch (snapshot.state) {
+    switch (state) {
         case media::PlaybackState::Preparing:
             return "PREPARING / MUTED";
         case media::PlaybackState::Buffering:

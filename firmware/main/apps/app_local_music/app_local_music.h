@@ -39,6 +39,7 @@ private:
     void render_playback(const std::string& title, const std::string& status);
     void show_list();
     std::string playback_status() const;
+    std::string playback_status(media::PlaybackState state) const;
 
     media::SdCardPort sd_card_;
     std::unique_ptr<media::BoardAudioCodecPort> codec_port_;

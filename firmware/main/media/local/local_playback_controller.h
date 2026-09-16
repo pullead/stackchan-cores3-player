@@ -8,6 +8,7 @@
 #include "media/audio/pcm_tap.h"
 #include "media/media_mode_controller.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -59,15 +60,34 @@ public:
     void stop_for_ai();
     void set_pcm_tap(PcmTap* tap) noexcept { pcm_tap_ = tap; }
 
-    // Allocation-free state query for the audio loop.  snapshot() copies two
-    // std::strings, which has no place in a loop that runs per PCM chunk.
-    PlaybackState state() const;
-    size_t played_frames() const;
+    // Lock-free progress view.  The audio task holds the mutex for the whole
+    // of pump() -- including the SD borrow and the blocking I2S write -- so a
+    // UI that took the lock to read progress would only get updates in the
+    // gaps between chunks, making the elapsed time jump several seconds.
+    struct PlaybackTick {
+        PlaybackState state = PlaybackState::Idle;
+        size_t played_frames = 0;
+        uint32_t sample_rate = 0;
+    };
+    PlaybackTick tick() const noexcept {
+        return {state_atomic_.load(std::memory_order_relaxed),
+                played_atomic_.load(std::memory_order_relaxed),
+                rate_atomic_.load(std::memory_order_relaxed)};
+    }
+
+    PlaybackState state() const noexcept { return state_atomic_.load(std::memory_order_relaxed); }
+    size_t played_frames() const noexcept { return played_atomic_.load(std::memory_order_relaxed); }
     LocalPlaybackSnapshot snapshot() const;
 
 private:
     bool has_supported_format() const noexcept;
+    void publish_progress() noexcept;
+
     mutable std::recursive_mutex mutex_;
+    // Published for readers that must not block on the audio task.
+    std::atomic<PlaybackState> state_atomic_{PlaybackState::Idle};
+    std::atomic<size_t> played_atomic_{0};
+    std::atomic<uint32_t> rate_atomic_{0};
     void fail(std::string error);
     void stop_pipeline();
     void close_sink();
