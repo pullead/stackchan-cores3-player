@@ -65,6 +65,7 @@ private:
     bool playback_view_ = false;
     std::string selected_title_;
     std::string shown_status_;
+    std::string shown_elapsed_;
     PendingAction pending_action_ = PendingAction::None;
     std::size_t pending_index_ = 0;
 };

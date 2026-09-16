@@ -205,8 +205,19 @@ void LocalPlaybackController::stop_for_ai() {
     stop_pipeline();
 }
 
+PlaybackState LocalPlaybackController::state() const {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
+    return state_machine_.state();
+}
+
+size_t LocalPlaybackController::played_frames() const {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
+    return played_frames_;
+}
+
 LocalPlaybackSnapshot LocalPlaybackController::snapshot() const {
     std::lock_guard<std::recursive_mutex> guard(mutex_);
+    const PcmFormat& format = decoder_ ? decoder_->format() : reader_.format();
     return {
         state_machine_.state(),
         title_,
@@ -214,6 +225,7 @@ LocalPlaybackSnapshot LocalPlaybackController::snapshot() const {
         played_frames_,
         error_,
         true,
+        format.sample_rate,
     };
 }
 

@@ -89,13 +89,28 @@ void AppLocalMusic::onRunning() {
         return;
     }
 
+    const media::LocalPlaybackSnapshot snapshot = playback_->snapshot();
     const std::string status = playback_status();
-    if (status == shown_status_) {
+    // Elapsed time is the only on-screen evidence that a muted track is
+    // actually advancing rather than stuck.
+    std::string elapsed = "--:--";
+    if (snapshot.sample_rate > 0) {
+        const uint32_t seconds = snapshot.played_frames / snapshot.sample_rate;
+        elapsed = std::to_string(seconds / 60) + ":" +
+                  (seconds % 60 < 10 ? "0" : "") + std::to_string(seconds % 60);
+        elapsed += "  @" + std::to_string(snapshot.sample_rate) + "Hz";
+    }
+
+    if (status == shown_status_ && elapsed == shown_elapsed_) {
         return;
     }
     shown_status_ = status;
+    shown_elapsed_ = elapsed;
     LvglLockGuard lock;
     detail_->setText(shown_status_);
+    if (playback_progress_) {
+        playback_progress_->setText(shown_elapsed_);
+    }
 }
 
 void AppLocalMusic::onClose() {
@@ -126,6 +141,7 @@ void AppLocalMusic::onClose() {
     pending_action_ = PendingAction::None;
     selected_title_.clear();
     shown_status_.clear();
+    shown_elapsed_.clear();
     pump_task_.reset();
     playback_.reset();
     speaker_sink_.reset();

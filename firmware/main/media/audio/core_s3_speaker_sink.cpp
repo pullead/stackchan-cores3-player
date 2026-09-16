@@ -2,6 +2,12 @@
 
 #include "media/audio/volume_policy.h"
 
+#ifdef ESP_PLATFORM
+#include <esp_log.h>
+
+#define TAG "MediaSink"
+#endif
+
 namespace media {
 
 CoreS3SpeakerSink::CoreS3SpeakerSink(AudioCodecPort& codec, MediaAudioSession* session)
@@ -36,6 +42,11 @@ bool CoreS3SpeakerSink::open(const PcmFormat& format) {
     codec_.set_volume(kMutedVolumePercent);
 
     channels_ = format.channels;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "Sink open at %u Hz, %u ch, %u bit",
+             static_cast<unsigned>(format.sample_rate), static_cast<unsigned>(format.channels),
+             static_cast<unsigned>(format.bits_per_sample));
+#endif
     return true;
 }
 

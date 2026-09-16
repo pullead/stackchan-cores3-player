@@ -26,6 +26,9 @@ struct LocalPlaybackSnapshot {
     size_t played_frames = 0;
     std::string error;
     bool muted = true;
+    // Needed to turn played_frames into elapsed time on screen; a muted test
+    // otherwise gives no way to tell playback from a frozen page.
+    uint32_t sample_rate = 0;
 };
 
 // Drives one local track from stream to speaker.
@@ -55,6 +58,11 @@ public:
     void stop();
     void stop_for_ai();
     void set_pcm_tap(PcmTap* tap) noexcept { pcm_tap_ = tap; }
+
+    // Allocation-free state query for the audio loop.  snapshot() copies two
+    // std::strings, which has no place in a loop that runs per PCM chunk.
+    PlaybackState state() const;
+    size_t played_frames() const;
     LocalPlaybackSnapshot snapshot() const;
 
 private:

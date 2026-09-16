@@ -4,6 +4,9 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 
+#include <esp_heap_caps.h>
+#include <freertos/task.h>
+
 #include <string>
 
 #define TAG "MediaPump"
@@ -27,35 +30,47 @@ void PlaybackPumpTask::run() noexcept {
     std::string reported_error;
 #endif
     while (true) {
-        const LocalPlaybackSnapshot snapshot = controller_.snapshot();
+        // state() does not allocate; snapshot() is only taken when something
+        // actually needs the strings.
+        const PlaybackState state = controller_.state();
         const PumpAction action =
-            next_pump_action(snapshot.state, stop_requested_.load(std::memory_order_acquire));
+            next_pump_action(state, stop_requested_.load(std::memory_order_acquire));
         if (action == PumpAction::Exit) {
             break;
         }
 #ifdef ESP_PLATFORM
         // The controller keeps its failure reason in the snapshot, which the UI
         // shows but the log never did; without it a failed start is invisible.
-        if (snapshot.state == PlaybackState::Error && !snapshot.error.empty() &&
-            snapshot.error != reported_error) {
-            reported_error = snapshot.error;
-            ESP_LOGE(TAG, "Playback error: %s", snapshot.error.c_str());
+        if (state == PlaybackState::Error) {
+            const LocalPlaybackSnapshot snapshot = controller_.snapshot();
+            if (!snapshot.error.empty() && snapshot.error != reported_error) {
+                reported_error = snapshot.error;
+                ESP_LOGE(TAG, "Playback error: %s", snapshot.error.c_str());
+            }
         }
 #endif
         if (action == PumpAction::Pump) {
 #ifdef ESP_PLATFORM
             const int64_t now_us = esp_timer_get_time();
-            if (!measuring && snapshot.state == PlaybackState::Playing) {
+            if (!measuring && state == PlaybackState::Playing) {
                 measuring = true;
                 measure_start_us = now_us;
-                measure_start_frames = snapshot.played_frames;
+                measure_start_frames = controller_.played_frames();
                 last_report_us = now_us;
             } else if (measuring && now_us - last_report_us >= 5000000) {
                 const int64_t elapsed_us = now_us - measure_start_us;
-                const size_t frames = snapshot.played_frames - measure_start_frames;
+                const size_t frames = controller_.played_frames() - measure_start_frames;
                 const int64_t rate = elapsed_us > 0 ? (static_cast<int64_t>(frames) * 1000000) / elapsed_us : 0;
-                ESP_LOGI(TAG, "Delivered %u frames in %lld ms -> %lld frames/s",
-                         static_cast<unsigned>(frames), elapsed_us / 1000, rate);
+                // Stack and heap headroom: a reboot after a while of playing is
+                // most often one of these running out, and the panic itself
+                // says nothing about how close it had been creeping.
+                ESP_LOGI(TAG, "Delivered %u frames in %u ms -> %u frames/s "
+                              "(stack free %u, heap free %u, psram free %u)",
+                         static_cast<unsigned>(frames), static_cast<unsigned>(elapsed_us / 1000),
+                         static_cast<unsigned>(rate),
+                         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+                         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                         static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
                 last_report_us = now_us;
             }
 #endif
@@ -66,10 +81,11 @@ void PlaybackPumpTask::run() noexcept {
 #ifdef ESP_PLATFORM
         if (measuring) {
             const int64_t elapsed_us = esp_timer_get_time() - measure_start_us;
-            const size_t frames = snapshot.played_frames - measure_start_frames;
+            const size_t frames = controller_.played_frames() - measure_start_frames;
             const int64_t rate = elapsed_us > 0 ? (static_cast<int64_t>(frames) * 1000000) / elapsed_us : 0;
-            ESP_LOGI(TAG, "Playback ended: %u frames in %lld ms -> %lld frames/s",
-                     static_cast<unsigned>(frames), elapsed_us / 1000, rate);
+            ESP_LOGI(TAG, "Playback ended: %u frames in %u ms -> %u frames/s",
+                     static_cast<unsigned>(frames), static_cast<unsigned>(elapsed_us / 1000),
+                     static_cast<unsigned>(rate));
             measuring = false;
         }
 #endif
