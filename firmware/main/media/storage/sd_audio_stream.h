@@ -9,11 +9,11 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace media {
 
-// File callbacks deliberately expose no write operation. The owner keeps the
-// SPI3 display handoff acquired for the entire lifetime of the open file.
+// File callbacks deliberately expose no write operation.
 struct SdAudioFileOperations {
     void* context = nullptr;
     bool (*mount)(void*, std::string&) = nullptr;
@@ -24,11 +24,25 @@ struct SdAudioFileOperations {
     bool (*unmount)(void*, std::string&) = nullptr;
 };
 
+// Reads one track from the CoreS3 SD card.
+//
+// GPIO35 is shared between the display's D/C path and SPI3 MISO, so every SD
+// access has to borrow the bus through Spi3DisplayHandoff, which also holds the
+// LVGL lock.  Holding it for a whole track would freeze the screen for the
+// length of the song, so this stream borrows the bus in short bursts instead:
+// one large prefetch fills a RAM buffer, the bus is handed straight back, and
+// the decoder is then served from RAM until the buffer runs dry.  The card
+// stays mounted throughout; only the pin routing and the LVGL lock are cycled.
 class SdAudioStream final : public AudioStream {
 public:
+    // ~4 seconds of 128 kbps audio per borrow, so the display is blocked only
+    // a few times per track rather than continuously.
+    static constexpr std::size_t kPrefetchBytes = 64 * 1024;
+
     SdAudioStream(board::Spi3DisplayHandoff& handoff,
                   SdAudioFileOperations operations,
-                  std::string path) noexcept;
+                  std::string path,
+                  std::size_t prefetch_bytes = kPrefetchBytes) noexcept;
     ~SdAudioStream() override;
 
     AudioStreamStatus read(uint8_t* destination, std::size_t capacity,
@@ -40,16 +54,27 @@ public:
     AudioStreamStatus close() noexcept override;
     const std::string& last_error() const noexcept { return last_error_; }
 
+    // Diagnostics: how often the display bus had to be taken away.
+    std::size_t borrow_count() const noexcept { return borrow_count_; }
+
 private:
+    // Refills the prefetch buffer, borrowing the bus for the duration.
+    AudioStreamStatus refill() noexcept;
+    std::size_t buffered() const noexcept { return prefetch_length_ - prefetch_offset_; }
+
     board::Spi3DisplayHandoff* handoff_;
     SdAudioFileOperations operations_;
-    std::unique_ptr<board::Spi3DisplayHandoffGuard> handoff_guard_;
     std::string path_;
+    std::vector<uint8_t> prefetch_;
+    std::size_t prefetch_offset_ = 0;
+    std::size_t prefetch_length_ = 0;
+    std::size_t borrow_count_ = 0;
     void* file_ = nullptr;
     uint64_t size_ = 0;
     uint64_t position_ = 0;
     bool mounted_ = false;
     bool open_ = false;
+    bool source_eof_ = false;
     std::string last_error_;
 };
 

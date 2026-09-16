@@ -7,8 +7,10 @@
 #include <vector>
 
 #include <media/audio/board_audio_codec_port.h>
+#include <media/audio/board_audio_session_port.h>
 #include <media/audio/core_s3_speaker_sink.h>
 #include <media/local/local_playback_controller.h>
+#include <media/local/playback_pump_task.h>
 #include <mooncake.h>
 #include <smooth_lvgl.hpp>
 
@@ -30,8 +32,14 @@ private:
 
     media::SdCardPort sd_card_;
     std::unique_ptr<media::BoardAudioCodecPort> codec_port_;
+    // Takes the shared I2S channel from the AI voice path while music plays.
+    std::unique_ptr<media::BoardAudioSessionPort> session_port_;
+    std::unique_ptr<media::MediaAudioSession> audio_session_;
     std::unique_ptr<media::CoreS3SpeakerSink> speaker_sink_;
     std::unique_ptr<media::LocalPlaybackController> playback_;
+    // Decoding runs here, not in onRunning(): the LVGL frame rate must not
+    // throttle the decoder.
+    std::unique_ptr<media::PlaybackPumpTask> pump_task_;
 
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> panel_;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> title_;
@@ -46,4 +54,5 @@ private:
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button> back_;
     bool playback_view_ = false;
     std::string selected_title_;
+    std::string shown_status_;
 };

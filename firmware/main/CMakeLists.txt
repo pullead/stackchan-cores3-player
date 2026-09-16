@@ -1,7 +1,7 @@
 # Define xiaozhi source directory
 set(XIAOZHI_MAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../xiaozhi-esp32/main")
 
-file(GLOB_RECURSE STACK_CHAN_SOURCES
+set(STACK_CHAN_SOURCE_GLOBS
     "apps/*.c"
     "apps/*.cc"
     "apps/*.cpp"
@@ -18,6 +18,16 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES
     "stackchan/*.cc"
     "stackchan/*.cpp"
 )
+
+# CONFIGURE_DEPENDS re-runs the glob when sources are added or removed; without
+# it a newly created file silently fails to link.  IDF also includes this file
+# in CMake script mode to resolve component requirements, where the option is
+# rejected, so it is only used during a real configure.
+if(CMAKE_SCRIPT_MODE_FILE)
+    file(GLOB_RECURSE STACK_CHAN_SOURCES ${STACK_CHAN_SOURCE_GLOBS})
+else()
+    file(GLOB_RECURSE STACK_CHAN_SOURCES CONFIGURE_DEPENDS ${STACK_CHAN_SOURCE_GLOBS})
+endif()
 # Decoder adapters are included by the media glob above; keep this comment as
 # a dependency boundary: no Arduino Audio/I2S implementation is linked here.
 set(STACK_CHAN_INCLUDE_DIRS 

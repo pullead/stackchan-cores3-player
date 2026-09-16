@@ -3,6 +3,7 @@
 #include <assets/assets.h>
 #include <audio/audio_codec.h>
 #include <board.h>
+#include <hal/board/cores3_audio_codec.h>
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
 #include <media/decoder/hifi_decoder_adapter.h>
@@ -44,8 +45,22 @@ void AppLocalMusic::onOpen() {
     auto* codec = board.GetAudioCodec();
     if (codec != nullptr) {
         codec_port_ = std::make_unique<media::BoardAudioCodecPort>(*codec);
-        speaker_sink_ = std::make_unique<media::CoreS3SpeakerSink>(*codec_port_);
+        // Only the CoreS3 codec can be retimed away from the AI path's 24 kHz
+        // mono channel.  Without it the sink still works, but music would be
+        // limited to whatever rate the AI path is running at.
+        if (auto* cores3 = dynamic_cast<CoreS3AudioCodec*>(codec); cores3 != nullptr) {
+            session_port_ = std::make_unique<media::BoardAudioSessionPort>(*cores3);
+            audio_session_ = std::make_unique<media::MediaAudioSession>(*session_port_);
+        } else {
+            mclog::tagWarn(getAppInfo().name, "codec cannot be retimed for media playback");
+        }
+        speaker_sink_ = std::make_unique<media::CoreS3SpeakerSink>(*codec_port_, audio_session_.get());
         playback_ = std::make_unique<media::LocalPlaybackController>(*speaker_sink_);
+        pump_task_ = std::make_unique<media::PlaybackPumpTask>(*playback_);
+        if (!pump_task_->start()) {
+            mclog::tagError(getAppInfo().name, "media pump task unavailable");
+            pump_task_.reset();
+        }
     } else {
         mclog::tagError(getAppInfo().name, "audio codec unavailable");
     }
@@ -66,19 +81,27 @@ void AppLocalMusic::onOpen() {
 }
 
 void AppLocalMusic::onRunning() {
-    if (!playback_) {
+    // Decoding happens on the media pump task; this only mirrors its state.
+    if (!playback_ || !playback_view_ || !detail_) {
         return;
     }
 
-    playback_->pump();
-    if (playback_view_ && detail_) {
-        LvglLockGuard lock;
-        detail_->setText(playback_status());
+    const std::string status = playback_status();
+    if (status == shown_status_) {
+        return;
     }
+    shown_status_ = status;
+    LvglLockGuard lock;
+    detail_->setText(shown_status_);
 }
 
 void AppLocalMusic::onClose() {
     mclog::tagInfo(getAppInfo().name, "on close");
+    // Stop the pump before the controller so no decode is in flight while the
+    // stream, sink and audio session are torn down.
+    if (pump_task_) {
+        pump_task_->stop();
+    }
     if (playback_) {
         playback_->stop();
     }
@@ -98,8 +121,14 @@ void AppLocalMusic::onClose() {
     panel_.reset();
     playback_view_ = false;
     selected_title_.clear();
+    shown_status_.clear();
+    pump_task_.reset();
     playback_.reset();
     speaker_sink_.reset();
+    // Release the audio channel last: the sink hands it back on close, and this
+    // only tears down the objects afterwards.
+    audio_session_.reset();
+    session_port_.reset();
     codec_port_.reset();
 }
 
@@ -237,7 +266,7 @@ void AppLocalMusic::render_playback(const std::string& title, const std::string&
 
     playback_note_ = std::make_unique<Label>(*panel_);
     playback_note_->setText("COVER  /  LYRICS  /  SPECTRUM PENDING");
-    playback_note_->setTextFont(&lv_font_montserrat_12);
+    playback_note_->setTextFont(&font_puhui_14_1);
     playback_note_->setTextColor(lv_color_hex(kSecondary));
     playback_note_->align(LV_ALIGN_TOP_MID, 0, 142);
 
@@ -249,7 +278,7 @@ void AppLocalMusic::render_playback(const std::string& title, const std::string&
     back->setShadowWidth(0);
     back->setRadius(12);
     back->label().setText("BACK TO LIST");
-    back->label().setTextFont(&lv_font_montserrat_12);
+    back->label().setTextFont(&font_puhui_14_1);
     back->label().setTextColor(lv_color_hex(kPrimary));
     back->onClick().connect([this]() { show_list(); });
 

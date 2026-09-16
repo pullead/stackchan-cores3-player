@@ -196,3 +196,59 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 证据：`include/decoder/impl/esp_mp3_dec.h` 提供 `esp_mp3_dec_open/decode/reset/close`，`esp_audio_dec.h` 的 common API 使用调用者提供的编码输入缓冲和 PCM 输出缓冲；ESP32-S3 预编译库已经存在。该 API 是 frame-oriented，需要新增薄适配层把 `AudioStream` 的增量读取、输入缓冲、metadata 和错误状态接到 `AudioDecoder`，但不会创建 I2S、AudioSink 或改变音量。
 
 该组件头文件含 Espressif Modified MIT/MIT 许可证说明，目标硬件是 Espressif CoreS3；实现时优先链接已管理组件，不复制第三方实现源码。真实 MP3 fixture 测试应在适配层完成后加入。
+
+## 2026-09-16：P0 阶段——真实播放链路的四个结构性修复
+
+本轮由 Claude Code 接手。目标是让一首真实 MP3 能在 StackChan 上不断音地播放，同时播放期间屏幕仍可刷新。用户确认的三个前提：媒体模式下重建 codec 为 44.1 kHz 立体声、音量继续锁定 0%（架构先行，出声测试另行授权）、退出 `LOCAL MUSIC` 即停止播放。
+
+### 先修基线：主机测试从未真正执行过
+
+`codex` 阶段登记的主机测试在本机首次运行后暴露 5 个问题，全部已修复：
+
+1. `local_playback_controller_test` 与 `hifi_decoder_adapter_test` 无法链接。CMake 漏了 `pcm_tap.cpp`、`media_mode_controller.cpp`；真实 MP3 后端依赖 ESP 组件头，主机无法编译，改为 `tests/host_stubs/esp_mp3_decoder_backend_host_stub.cpp`，并在测试中注明该断言只代表主机语义。
+2. WAV 路径的分块契约被破坏。`read_frames(frames.data(), frames.size())` 把数组元素数当作帧数上限，一次读 2048 帧而非约定的 1024（`6061762` 扩大缓冲时漏改）。
+3. 多个测试在控制器销毁 `FakeStream` 之后读取 `stream->closed`，属于 use-after-free，结果不确定。改为通过生命周期更长的标志观察关闭。
+4. 三处测试期望与 `df3e0f7` 有意引入的「失败后保留 `PlaybackState::Error`」行为冲突，已对齐到实现。
+5. `sd_audio_stream_test` 让多个流同时存活，而 `Spi3DisplayHandoff` 全局唯一且不可重入，第二个流实际从未打开成功。改为逐用例作用域隔离。
+
+另外新增 `tests/host_stubs/no_abort_dialog.cpp`：MSVC 调试运行时在 `abort()` 时弹出模态对话框并等待人工点击，任何红测试都会挂起整个 ctest（实测 11 秒对 1.2 秒）。现在断言失败直接输出到 stderr 并以非零码退出。
+
+### 采样率死结：媒体模式重建 I2S 输出
+
+CoreS3 的 `AUDIO_INPUT_SAMPLE_RATE` 与 `AUDIO_OUTPUT_SAMPLE_RATE` 都固定为 24000，`CreateDuplexChannels` 断言两者相等，而 `CoreS3SpeakerSink::open` 只接受 24000/单声道。任何 44.1 kHz 的 MP3 都必然在打开 sink 时失败，与解码后端是否可用无关。
+
+新增 `media/audio/media_audio_session.*`：进入媒体模式时先释放麦克风、再重配输出时钟，退出时反向恢复；失败一律回滚，回滚本身失败则标记 `degraded()` 并给出错误文本，不静默吞掉。10 个主机测试覆盖顺序、非法格式、回滚、幂等，以及「切换媒体格式时不得把媒体格式误记为 AI 原始格式」。
+
+硬件侧给 `CoreS3AudioCodec` 增加 `ReconfigureOutput(sample_rate, channels)`：关闭输出 → 停 TX 通道 → `i2s_channel_reconfig_std_clock` → 重新启用 → 按需恢复输出。ESP32-S3 的 I2S 没有 APLL，44.1 kHz 由默认 PLL 的分数分频得到。同时修正了一处隐患：`EnableInput` 原本用 `output_sample_rate_` 配置麦克风，媒体模式改动输出后会带错采样率，已改为 `input_sample_rate_`。
+
+`CoreS3SpeakerSink` 随之放宽格式并绑定会话，`AudioCodecPort::write_mono(frames)` 改为 `write_samples(交错样本)`，`LocalPlaybackController` 去掉降混，立体声原样送达。
+
+### 解码搬出 UI 循环
+
+原先 `AppLocalMusic::onRunning()` 直接调用 `playback_->pump()`，LVGL 帧率直接决定音频吞吐，必然断音。新增 `media/local/playback_pump_task.*`：core 1、优先级 4（高于表情/舵机任务的 3）、12 KB 栈的独立 FreeRTOS 任务；写 sink 时阻塞在 I2S DMA 上形成自然节流，空闲时休眠让出 CPU。调度规则抽为 `playback_pump_policy.h` 的纯函数以便主机测试。`LocalPlaybackController` 的公有方法改由一把递归互斥保护，UI 线程只读快照。
+
+### SPI 总线：从整曲占用改为分块借用
+
+`SdAudioStream` 原本在构造时取得 `Spi3DisplayHandoffGuard` 并持有到关闭，也就是整首歌期间都持有。而 handoff 会持有 LVGL 锁并把 GPIO35 从显示输出改路由为 SPI3 MISO——播放期间屏幕既没有锁也没有引脚，进度、频谱、触摸反馈都不可能实现。
+
+改为分块借用：SD 卡保持挂载，每次预读 64 KB 时短暂借用总线再立刻归还，解码器随后从 RAM 取数据。按 128 kbps 估算约每 4 秒借用一次，屏幕在间隙中可以正常刷新。预读缓冲超过 512 字节，会由 `CONFIG_SPIRAM_USE_MALLOC` 自动落到 PSRAM。`seek` 会丢弃属于旧位置的缓冲数据，`tell()` 返回已交付字节数而非预读位置，并新增 `borrow_count()` 便于诊断。
+
+### 模式切换会跳过 onClose，导致 AI 语音以错误采样率启动
+
+`main.cpp` 的控制流是：Mooncake 主循环检测到 AI 启动请求后退出 → `uninstallAllApps()` → `DestroyMooncake()` → `startXiaozhi()`（永不返回）。因此 `AppLocalMusic` 与 AI 语音物理上不可能同时运行，原计划中 `MediaModeController` 的 AI 状态快照在当前架构下并非必需。
+
+但 `Mooncake::uninstallAllApps()` 直接 `_app_ability_manager.reset()`，不经过 Ability 状态机，**不会调用 `onClose()`**。而 `CoreS3SpeakerSink` 与 `MediaAudioSession` 原本都没有析构函数，于是「在 `LOCAL MUSIC` 打开状态下切换到 AI 模式」会让 codec 停留在 44.1 kHz 立体声、麦克风关闭的状态，紧接着启动的 AI 语音就会用错采样率，麦克风也不工作。
+
+修复方式是把归还动作下沉到析构：`MediaAudioSession` 析构时 `release()`，`CoreS3SpeakerSink` 析构时 `close()`。两者都补了主机测试，直接断言「仅靠析构也必须恢复 24 kHz 双工并交还麦克风」。同时 `PlaybackPumpTask::stop()` 增加了等待超时的周期性告警，避免泵卡在 SD 借用或 I2S 写入时无声无息。
+
+### 编译过程中发现的真实缺陷
+
+- `lv_font_montserrat_12` 并未编入本固件的字体集。这证实 `codex` 的最后一个提交 `62b63b7` 从未编译过。已改用固件内已有的 `font_puhui_14_1`。
+- `main/CMakeLists.txt` 的 `file(GLOB_RECURSE)` 缺少 `CONFIGURE_DEPENDS`，新增源文件会静默不参与链接（`playback_pump_task.cpp` 即因此链接失败）。已补上。
+
+### 当前状态
+
+- 主机测试 19/19 通过。
+- 固件镜像编译通过（`firmware/build-real-mp3`）。
+- 音量仍固定 0%，SD 卡仍为只读挂载，未执行任何刷写。
+- 尚未在设备上验证：44.1 kHz 重配是否真正生效、播放期间屏幕是否确实可刷新、退出后 AI 链路是否完全恢复。这些需要静音刷写后按客观指标核对（I2S 实际配置日志、写入帧数与墙钟时间之比收敛到 44100、环形缓冲 underrun 与 `PcmTap` drop 计数为零）。

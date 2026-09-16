@@ -34,7 +34,9 @@ public:
     size_t write(const int16_t* pcm, size_t frames) override {
         events.push_back(Event::Write);
         requested_frames.push_back(frames);
-        written_pcm.emplace_back(pcm, pcm + frames);
+        // PCM arrives interleaved, so a stereo frame carries two samples.
+        const size_t channels = opened_format.channels == 0 ? 1 : opened_format.channels;
+        written_pcm.emplace_back(pcm, pcm + frames * channels);
         return write_results.empty() ? frames : next_write_result();
     }
 
@@ -67,8 +69,13 @@ public:
     uint64_t tell() const noexcept override { return 0; }
     uint64_t size() const noexcept override { return 0; }
     bool is_open() const noexcept override { return open_; }
-    media::AudioStreamStatus close() noexcept override { open_ = false; closed = true; return media::AudioStreamStatus::Ok; }
+    media::AudioStreamStatus close() noexcept override { open_ = false; closed = true;
+        if (closed_out != nullptr) *closed_out = true;
+        return media::AudioStreamStatus::Ok; }
     bool closed = false;
+    // The controller owns and destroys this stream, so a test must observe
+    // closure through a flag that outlives the fake, never through the fake.
+    bool* closed_out = nullptr;
 private:
     bool open_ = true;
 };
@@ -253,7 +260,7 @@ bool test_zero_write_flushes_and_closes() {
     controller.pump();
 
     const auto snapshot = controller.snapshot();
-    return check(snapshot.state == media::PlaybackState::Idle, "zero write returns Idle") &&
+    return check(snapshot.state == media::PlaybackState::Error, "zero write is retained as Error") &&
            check(snapshot.played_frames == 0, "zero write makes no progress") &&
            check(!snapshot.error.empty(), "zero write is exposed as error") &&
            check(sink.events == std::vector<Event>{Event::Open, Event::Write, Event::Flush,
@@ -272,7 +279,7 @@ bool test_overreported_write_flushes_and_closes() {
     controller.pump();
 
     const auto snapshot = controller.snapshot();
-    return check(snapshot.state == media::PlaybackState::Idle, "overreported write returns Idle") &&
+    return check(snapshot.state == media::PlaybackState::Error, "overreported write is retained as Error") &&
            check(snapshot.played_frames == 0, "overreported write makes no trusted progress") &&
            check(!snapshot.error.empty(), "overreported write is exposed as error") &&
            check(sink.events == std::vector<Event>{Event::Open, Event::Write, Event::Flush,
@@ -314,7 +321,9 @@ bool test_stop_for_ai_flushes_before_close() {
 
 bool test_decoder_stream_route_writes_bounded_pcm_and_closes() {
     FakeSink sink;
+    bool stream_closed = false;
     auto* stream = new FakeStream();
+    stream->closed_out = &stream_closed;
     auto* decoder = new FakeDecoder();
     media::LocalPlaybackController controller(sink);
     controller.select("demo.mp3", std::unique_ptr<media::AudioStream>(stream),
@@ -329,12 +338,14 @@ bool test_decoder_stream_route_writes_bounded_pcm_and_closes() {
         !check(sink.written_pcm[0] == std::vector<int16_t>{11, 22}, "decoded PCM is preserved")) return false;
     controller.pump();
     return check(controller.snapshot().state == media::PlaybackState::Idle, "decoder EOF returns idle") &&
-           check(stream->closed, "EOF closes stream") && check(controller.snapshot().muted, "decoder route remains muted");
+           check(stream_closed, "EOF closes stream") && check(controller.snapshot().muted, "decoder route remains muted");
 }
 
 bool test_decoder_error_closes_everything_without_writing() {
     FakeSink sink;
+    bool stream_closed = false;
     auto* stream = new FakeStream();
+    stream->closed_out = &stream_closed;
     auto* decoder = new FakeDecoder();
     decoder->decode_error = true;
     media::LocalPlaybackController controller(sink);
@@ -342,29 +353,33 @@ bool test_decoder_error_closes_everything_without_writing() {
                       std::unique_ptr<media::AudioDecoder>(decoder));
     if (!check(controller.start(), "error decoder opens before decode")) return false;
     controller.pump();
-    return check(controller.snapshot().state == media::PlaybackState::Idle, "decoder error returns idle") &&
+    return check(controller.snapshot().state == media::PlaybackState::Error, "decoder error is retained as Error") &&
            check(!controller.snapshot().error.empty(), "decoder error is exposed") &&
-           check(stream->closed, "decoder error closes stream") &&
+           check(stream_closed, "decoder error closes stream") &&
            check(sink.requested_frames.empty(), "decoder error writes no PCM") &&
            check(sink.events.empty(), "decoder error before first frame does not open sink");
 }
 
 bool test_decoder_stop_closes_stream_and_sink() {
     FakeSink sink;
+    bool stream_closed = false;
     auto* stream = new FakeStream();
+    stream->closed_out = &stream_closed;
     auto* decoder = new FakeDecoder();
     media::LocalPlaybackController controller(sink);
     controller.select("stop.mp3", std::unique_ptr<media::AudioStream>(stream),
                       std::unique_ptr<media::AudioDecoder>(decoder));
     if (!check(controller.start(), "stop fixture starts")) return false;
     controller.stop();
-    return check(stream->closed, "stop closes stream") &&
+    return check(stream_closed, "stop closes stream") &&
            check(sink.events.empty(), "stop before first frame does not close unopened sink");
 }
 
 bool test_invalid_decoder_block_is_rejected_without_writing() {
     FakeSink sink;
+    bool stream_closed = false;
     auto* stream = new FakeStream();
+    stream->closed_out = &stream_closed;
     auto* decoder = new FakeDecoder();
     decoder->invalid_block = true;
     media::LocalPlaybackController controller(sink);
@@ -373,13 +388,15 @@ bool test_invalid_decoder_block_is_rejected_without_writing() {
     if (!check(controller.start(), "invalid block fixture starts")) return false;
     controller.pump();
     return check(!sink.requested_frames.size(), "invalid block never reaches sink") &&
-           check(stream->closed, "invalid block closes stream") &&
+           check(stream_closed, "invalid block closes stream") &&
            check(!controller.snapshot().error.empty(), "invalid block exposes error");
 }
 
-bool test_stereo_decoder_is_downmixed_to_mono() {
+bool test_stereo_decoder_plays_as_stereo() {
     FakeSink sink;
+    bool stream_closed = false;
     auto* stream = new FakeStream();
+    stream->closed_out = &stream_closed;
     auto* decoder = new FakeDecoder();
     decoder->stereo = true;
     decoder->pcm.channels = 2;
@@ -388,14 +405,19 @@ bool test_stereo_decoder_is_downmixed_to_mono() {
                       std::unique_ptr<media::AudioDecoder>(decoder));
     if (!check(controller.start(), "stereo fixture starts") || !check(sink.events.empty(), "stereo sink deferred")) return false;
     controller.pump();
-    return check(sink.opened_format.channels == 1, "stereo sink opens as mono") &&
-           check(sink.written_pcm[0] == std::vector<int16_t>{15, 40}, "stereo is downmixed") &&
+    // The sink retimes the codec, so stereo reaches the speaker interleaved
+    // instead of being averaged down to the AI path's mono channel.
+    return check(sink.opened_format.channels == 2, "stereo sink opens as stereo") &&
+           check(sink.written_pcm[0] == std::vector<int16_t>{10, 20, 30, 50},
+                 "stereo samples pass through untouched") &&
            check(controller.snapshot().total_frames == 0, "streaming duration remains unknown");
 }
 
 bool test_eof_with_frames_writes_final_pcm_before_cleanup() {
     FakeSink sink;
+    bool stream_closed = false;
     auto* stream = new FakeStream();
+    stream->closed_out = &stream_closed;
     auto* decoder = new FakeDecoder();
     decoder->eof_with_frames = true;
     media::LocalPlaybackController controller(sink);
@@ -405,7 +427,7 @@ bool test_eof_with_frames_writes_final_pcm_before_cleanup() {
     controller.pump();
     return check(sink.written_pcm[0] == std::vector<int16_t>{11, 22}, "EOF frame payload is written") &&
            check(controller.snapshot().state == media::PlaybackState::Idle, "EOF-with-frames cleans up") &&
-           check(stream->closed, "EOF-with-frames closes stream");
+           check(stream_closed, "EOF-with-frames closes stream");
 }
 
 }  // namespace
@@ -423,7 +445,7 @@ int main() {
     failures += !test_decoder_error_closes_everything_without_writing();
     failures += !test_decoder_stop_closes_stream_and_sink();
     failures += !test_invalid_decoder_block_is_rejected_without_writing();
-    failures += !test_stereo_decoder_is_downmixed_to_mono();
+    failures += !test_stereo_decoder_plays_as_stereo();
     failures += !test_eof_with_frames_writes_final_pcm_before_cleanup();
     return failures == 0 ? 0 : 1;
 }

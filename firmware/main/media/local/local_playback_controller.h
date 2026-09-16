@@ -10,9 +10,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <memory>
 
 namespace media {
 
@@ -27,6 +28,12 @@ struct LocalPlaybackSnapshot {
     bool muted = true;
 };
 
+// Drives one local track from stream to speaker.
+//
+// The audio task calls pump() while the UI thread calls select/start/stop and
+// snapshot(), so every public method is serialised by one recursive mutex.  It
+// is recursive because the failure paths call back into stop_pipeline() while
+// already holding the lock.
 class LocalPlaybackController {
 public:
     static constexpr size_t kPlaybackChunkFrames = 1024;
@@ -49,6 +56,7 @@ public:
 
 private:
     bool has_supported_format() const noexcept;
+    mutable std::recursive_mutex mutex_;
     void fail(std::string error);
     void stop_pipeline();
     void close_sink();
@@ -68,6 +76,8 @@ private:
     bool decoder_eof_ = false;
     std::string error_;
     bool sink_open_ = false;
+    // Channel count the sink was opened with; pending PCM is interleaved by it.
+    uint8_t sink_channels_ = 0;
     PcmTap* pcm_tap_ = nullptr;
 };
 

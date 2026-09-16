@@ -19,14 +19,14 @@ bool BoardAudioCodecPort::enable_output(bool enabled) {
     return codec_.output_enabled() == enabled;
 }
 
-size_t BoardAudioCodecPort::write_mono(const int16_t* samples, size_t frames) {
-    if (samples == nullptr || frames == 0) {
+size_t BoardAudioCodecPort::write_samples(const int16_t* samples, size_t count) {
+    if (samples == nullptr || count == 0) {
         return 0;
     }
 
-    std::vector<int16_t> chunk(samples, samples + frames);
+    std::vector<int16_t> chunk(samples, samples + count);
     codec_.OutputData(chunk);
-    return frames;
+    return count;
 }
 
 }  // namespace media

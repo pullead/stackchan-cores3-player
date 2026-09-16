@@ -2,6 +2,7 @@
 
 #include <array>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace media {
@@ -10,6 +11,7 @@ LocalPlaybackController::LocalPlaybackController(AudioSink& sink, MediaModeContr
     : sink_(sink), mode_(mode) {}
 
 void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav_bytes) {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
     stop();
     title_ = std::move(title);
     selected_bytes_ = std::move(wav_bytes);
@@ -23,6 +25,7 @@ void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav
 
 void LocalPlaybackController::select(std::string title, std::unique_ptr<AudioStream> stream,
                                      std::unique_ptr<AudioDecoder> decoder) {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
     stop();
     title_ = std::move(title);
     selected_bytes_.clear();
@@ -37,6 +40,7 @@ void LocalPlaybackController::select(std::string title, std::unique_ptr<AudioStr
 }
 
 bool LocalPlaybackController::start() {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
     if (state_machine_.state() != PlaybackState::Idle ||
         (selected_bytes_.empty() && (!stream_ || !decoder_))) {
         error_ = "No local track selected";
@@ -86,6 +90,7 @@ bool LocalPlaybackController::start() {
         fail("Audio sink open failed");
         return false;
     }
+    sink_channels_ = decoder_ ? 0 : sink_format.channels;
 
     // Compressed streams open the sink after the first decoded frame reveals
     // their PCM format; WAV has already opened it above.
@@ -95,6 +100,7 @@ bool LocalPlaybackController::start() {
 }
 
 void LocalPlaybackController::pump() {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
     if (state_machine_.state() != PlaybackState::Playing &&
         state_machine_.state() != PlaybackState::Buffering) {
         return;
@@ -131,36 +137,36 @@ void LocalPlaybackController::pump() {
                 return;
             }
             if (!sink_open_) {
-                PcmFormat sink_format = decoder_->format();
-                if (sink_format.channels == 2) sink_format.channels = 1;
+                // The sink retimes the shared I2S channel to the decoded
+                // format, so stereo music plays as stereo instead of being
+                // folded down to the AI path's mono channel.
+                const PcmFormat sink_format = decoder_->format();
                 if (!sink_.open(sink_format)) {
                     fail("Audio sink open failed");
                     return;
                 }
                 sink_open_ = true;
+                sink_channels_ = sink_format.channels;
                 state_machine_.transition(PlaybackState::Playing);
             }
             frame_count = block.frames;
-            if (decoder_->format().channels == 2) {
-                for (size_t index = 0; index < frame_count; ++index) {
-                    const int32_t left = frames[index * 2];
-                    const int32_t right = frames[index * 2 + 1];
-                    frames[index] = static_cast<int16_t>((left + right) / 2);
-                }
-            }
             if (result == AudioDecodeStatus::Eof) decoder_eof_ = true;
         } else {
-            frame_count = reader_.read_frames(frames.data(), frames.size());
+            // frames[] holds two int16 per frame for stereo compressed audio,
+            // but read_frames() counts frames: keep the bounded chunk size.
+            frame_count = reader_.read_frames(frames.data(), kPlaybackChunkFrames);
             if (frame_count == 0) {
                 stop_pipeline();
                 return;
             }
         }
-        pending_pcm_.assign(frames.begin(), frames.begin() + frame_count);
+        const size_t channels = sink_channels_ == 0 ? 1 : sink_channels_;
+        pending_pcm_.assign(frames.begin(), frames.begin() + frame_count * channels);
         pending_offset_ = 0;
     }
 
-    const size_t pending_frames = pending_pcm_.size() - pending_offset_;
+    const size_t channels = sink_channels_ == 0 ? 1 : sink_channels_;
+    const size_t pending_frames = (pending_pcm_.size() - pending_offset_) / channels;
     const size_t written = sink_.write(pending_pcm_.data() + pending_offset_, pending_frames);
     if (written == 0 || written > pending_frames) {
         fail("Audio sink write failed");
@@ -169,10 +175,11 @@ void LocalPlaybackController::pump() {
     played_frames_ += written;
     if (pcm_tap_) {
         // Observation is deliberately after sink admission and never gates
-        // playback; a full tap only increments its drop counter.
-        pcm_tap_->push(pending_pcm_.data() + pending_offset_, written);
+        // playback; a full tap only increments its drop counter.  The tap
+        // counts interleaved samples, not frames.
+        pcm_tap_->push(pending_pcm_.data() + pending_offset_, written * channels);
     }
-    pending_offset_ += written;
+    pending_offset_ += written * channels;
     if (pending_offset_ != pending_pcm_.size()) {
         return;
     }
@@ -185,11 +192,13 @@ void LocalPlaybackController::pump() {
 }
 
 void LocalPlaybackController::stop() {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
     stop_pipeline();
     error_.clear();
 }
 
 void LocalPlaybackController::stop_for_ai() {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
     const PlaybackState state = state_machine_.state();
     if (state == PlaybackState::Playing || state == PlaybackState::Paused) {
         state_machine_.transition(PlaybackState::PreparingForAi);
@@ -198,6 +207,7 @@ void LocalPlaybackController::stop_for_ai() {
 }
 
 LocalPlaybackSnapshot LocalPlaybackController::snapshot() const {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
     return {
         state_machine_.state(),
         title_,
@@ -209,8 +219,9 @@ LocalPlaybackSnapshot LocalPlaybackController::snapshot() const {
 }
 
 bool LocalPlaybackController::has_supported_format() const noexcept {
-    const PcmFormat& format = reader_.format();
-    return format.sample_rate == 24000 && format.channels == 1 && format.bits_per_sample == 16;
+    // The sink owns the clock whitelist; this only rejects structurally broken
+    // WAV headers before the sink is touched.
+    return reader_.format().valid();
 }
 
 void LocalPlaybackController::fail(std::string error) {
@@ -240,6 +251,7 @@ void LocalPlaybackController::stop_pipeline() {
 }
 
 void LocalPlaybackController::close_sink() {
+    sink_channels_ = 0;
     if (sink_open_) {
         sink_.flush();
         sink_.close();

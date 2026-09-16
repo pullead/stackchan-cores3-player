@@ -5,6 +5,7 @@
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
+#include <driver/i2s_std.h>
 #include <driver/i2s_tdm.h>
 
 #define TAG "CoreS3AudioCodec"
@@ -199,7 +200,7 @@ void CoreS3AudioCodec::EnableInput(bool enable) {
             .bits_per_sample = 16,
             .channel = 2,
             .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
-            .sample_rate = (uint32_t)output_sample_rate_,
+            .sample_rate = (uint32_t)input_sample_rate_,
             .mclk_multiple = 0,
         };
         if (input_reference_) {
@@ -221,10 +222,11 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
         Settings settings("audio", false);
         output_volume_ = media::restore_persisted_volume(
             settings.GetInt("output_volume", output_volume_));
-        // Play 16bit 1 channel
+        // Channel count follows ReconfigureOutput: 1 for the AI voice path,
+        // 2 for interleaved stereo music.
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
-            .channel = 1,
+            .channel = (uint8_t)output_channels_,
             .channel_mask = 0,
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
@@ -235,6 +237,66 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
     }
     AudioCodec::EnableOutput(enable);
+}
+
+bool CoreS3AudioCodec::ReconfigureOutput(int sample_rate, int channels) {
+    if (sample_rate <= 0 || channels < 1 || channels > 2) {
+        ESP_LOGE(TAG, "Refusing invalid output format: %d Hz, %d ch", sample_rate, channels);
+        return false;
+    }
+    if (input_enabled_) {
+        // RX shares the clock tree; retiming underneath a live microphone would
+        // corrupt the AI capture path.
+        ESP_LOGE(TAG, "Refusing to retime output while the microphone is enabled");
+        return false;
+    }
+    if (sample_rate == output_sample_rate_ && channels == output_channels_) {
+        return true;
+    }
+
+    const bool was_enabled = output_enabled_;
+    if (was_enabled) {
+        EnableOutput(false);
+    }
+
+    esp_err_t result = i2s_channel_disable(tx_handle_);
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "Could not stop the TX channel: %s", esp_err_to_name(result));
+        if (was_enabled) EnableOutput(true);
+        return false;
+    }
+
+    // The ESP32-S3 I2S has no APLL, but its fractional divider derives 44.1 kHz
+    // from the default PLL with an error well under the audible threshold.
+    i2s_std_clk_config_t clk_cfg = {
+        .sample_rate_hz = (uint32_t)sample_rate,
+        .clk_src = I2S_CLK_SRC_DEFAULT,
+        .ext_clk_freq_hz = 0,
+        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+    };
+    result = i2s_channel_reconfig_std_clock(tx_handle_, &clk_cfg);
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "Could not retime TX to %d Hz: %s", sample_rate, esp_err_to_name(result));
+        // Leave the channel running at its previous rate rather than dead.
+        ESP_ERROR_CHECK_WITHOUT_ABORT(i2s_channel_enable(tx_handle_));
+        if (was_enabled) EnableOutput(true);
+        return false;
+    }
+
+    result = i2s_channel_enable(tx_handle_);
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "Could not restart the TX channel: %s", esp_err_to_name(result));
+        return false;
+    }
+
+    output_sample_rate_ = sample_rate;
+    output_channels_ = channels;
+    ESP_LOGI(TAG, "Output retimed to %d Hz, %d ch", sample_rate, channels);
+
+    if (was_enabled) {
+        EnableOutput(true);
+    }
+    return true;
 }
 
 int CoreS3AudioCodec::Read(int16_t* dest, int samples) {

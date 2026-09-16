@@ -12,7 +12,7 @@ public:
 
     void set_volume(uint8_t volume) override;
     bool enable_output(bool enabled) override;
-    size_t write_mono(const int16_t* samples, size_t frames) override;
+    size_t write_samples(const int16_t* samples, size_t count) override;
 
 private:
     AudioCodec& codec_;

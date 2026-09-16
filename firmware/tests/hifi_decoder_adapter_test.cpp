@@ -35,6 +35,8 @@ public:
 };
 
 int main() {
+    // Host builds link the stub backend, so the factory yields nothing here.
+    // The real esp_audio_codec MP3 backend can only be verified on device.
     assert(create_hifi_decoder_backend() == nullptr);
     FixtureStream stream; FixtureBackend backend; HifiDecoderAdapter decoder(backend);
     int16_t samples[2]{}; PcmBlock block{samples, 1, 0};
@@ -53,8 +55,11 @@ int main() {
     PcmBlock reopen{samples, 1, 0};
     assert(malformed.decode(reopen) == AudioDecodeStatus::Ok);
     // Backend I/O errors are terminal for the current stream, not EOF.
-    broken.io_error = true;
-    HifiDecoderAdapter io_adapter(broken);
+    // Use a fresh backend: the one above has already run to EOF, and reusing it
+    // would make eof() true for reasons unrelated to this case.
+    FixtureBackend io_backend;
+    io_backend.io_error = true;
+    HifiDecoderAdapter io_adapter(io_backend);
     assert(io_adapter.open(stream) == AudioDecodeStatus::Ok);
     PcmBlock io_block{samples, 1, 0};
     assert(io_adapter.decode(io_block) == AudioDecodeStatus::IoError);

@@ -18,6 +18,10 @@ private:
     esp_codec_dev_handle_t output_dev_ = nullptr;
     esp_codec_dev_handle_t input_dev_ = nullptr;
 
+    // TX and RX share one duplex I2S0 clock, so the output format is only
+    // mutable while the microphone side is released.
+    int output_channels_ = 1;
+
     void CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din);
 
     virtual int Read(int16_t* dest, int samples) override;
@@ -32,6 +36,12 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+
+    // Retime the speaker path, e.g. from the AI channel's 24 kHz mono to
+    // 44.1 kHz stereo for music.  Requires the microphone to be disabled
+    // first; returns false and leaves the codec untouched otherwise.
+    bool ReconfigureOutput(int sample_rate, int channels);
+    int output_channels() const { return output_channels_; }
 };
 
 #endif // _BOX_AUDIO_CODEC_H
