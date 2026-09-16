@@ -148,6 +148,27 @@ bool test_seek_discards_buffered_data() {
                  "data after a seek comes from the new position");
 }
 
+bool test_reading_survives_repeated_seeks() {
+    // Skipping an ID3 tag seeks before the first read, so a seek must leave the
+    // stream fully usable.  On device a seek also stops and restarts the fill
+    // task; forgetting the restart left the decoder waiting forever.
+    auto source = std::make_unique<FakeSource>(4096);
+    media::PrefetchingStream stream(std::move(source), 1024, 256);
+
+    for (uint64_t offset : {uint64_t{100}, uint64_t{2000}, uint64_t{50}}) {
+        if (!check(stream.seek(offset) == media::AudioStreamStatus::Ok, "seek succeeds")) return false;
+        stream.fill_once();
+        uint8_t out[8] = {};
+        std::size_t got = 0;
+        if (!check(stream.read(out, sizeof(out), got) == media::AudioStreamStatus::Ok && got == 8,
+                   "data is still readable after a seek")) return false;
+        if (!check(out[0] == static_cast<uint8_t>(offset), "data comes from the new position")) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool test_close_releases_the_source() {
     bool closed = false;
     auto source = std::make_unique<FakeSource>(64);
@@ -165,6 +186,7 @@ int main() {
     const bool ok = test_prefetch_serves_reads_from_the_ring() &&
                     test_data_survives_the_whole_file() &&
                     test_eof_is_reported_after_the_ring_drains() && test_source_errors_surface() &&
-                    test_seek_discards_buffered_data() && test_close_releases_the_source();
+                    test_seek_discards_buffered_data() && test_reading_survives_repeated_seeks() &&
+                    test_close_releases_the_source();
     return ok ? 0 : 1;
 }

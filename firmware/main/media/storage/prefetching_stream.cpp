@@ -23,15 +23,24 @@ PrefetchingStream::PrefetchingStream(std::unique_ptr<AudioStream> source, std::s
         return;
     }
 
+    if (!start_task()) {
+        failed_.store(true, std::memory_order_release);
+    }
+}
+
+bool PrefetchingStream::start_task() noexcept {
 #ifdef ESP_PLATFORM
+    if (handle_ != nullptr) return true;
+    stop_requested_.store(false, std::memory_order_release);
     const BaseType_t created = xTaskCreatePinnedToCore(trampoline, "sd_prefetch", kStackBytes, this,
                                                        kPriority, &handle_, kCoreId);
     if (created != pdPASS) {
         handle_ = nullptr;
         ESP_LOGE(TAG, "Could not create the SD prefetch task");
-        failed_.store(true, std::memory_order_release);
+        return false;
     }
 #endif
+    return true;
 }
 
 PrefetchingStream::~PrefetchingStream() { close(); }
@@ -70,6 +79,7 @@ AudioStreamStatus PrefetchingStream::read(uint8_t* destination, std::size_t capa
     if (destination == nullptr && capacity != 0) return AudioStreamStatus::InvalidArgument;
     if (capacity == 0) return AudioStreamStatus::Ok;
 
+    unsigned starve_ticks = 0;
     while (bytes_read < capacity) {
         const std::size_t taken = ring_.read(destination + bytes_read, capacity - bytes_read);
         bytes_read += taken;
@@ -84,6 +94,13 @@ AudioStreamStatus PrefetchingStream::read(uint8_t* destination, std::size_t capa
             // never gets here, and this is the signal that prefetching is
             // undersized rather than a silent stutter.
             ++starve_count_;
+            if (++starve_ticks >= kMaxStarveTicks) {
+#ifdef ESP_PLATFORM
+                ESP_LOGE(TAG, "Prefetch stalled: no data for %u ticks", starve_ticks);
+#endif
+                failed_.store(true, std::memory_order_release);
+                break;
+            }
 #ifdef ESP_PLATFORM
             vTaskDelay(1);
 #else
@@ -106,6 +123,13 @@ AudioStreamStatus PrefetchingStream::seek(uint64_t offset) noexcept {
     ring_.reset();
     position_ = offset;
     source_eof_.store(false, std::memory_order_release);
+    // Restart the filler: without this the ring is never refilled again and the
+    // decoder waits forever.  Skipping an ID3 tag seeks, so this is the normal
+    // path, not an edge case.
+    if (status == AudioStreamStatus::Ok && !start_task()) {
+        failed_.store(true, std::memory_order_release);
+        return AudioStreamStatus::IoError;
+    }
     return status;
 }
 

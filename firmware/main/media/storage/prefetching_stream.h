@@ -52,7 +52,13 @@ public:
     std::size_t starve_count() const noexcept { return starve_count_; }
 
 private:
+    bool start_task() noexcept;
     void stop_task() noexcept;
+
+    // A read waits for the filler rather than failing instantly, but never
+    // forever: pump() holds the controller lock while reading, so an unbounded
+    // wait freezes every UI action that needs that lock.
+    static constexpr unsigned kMaxStarveTicks = 1000;
 #ifdef ESP_PLATFORM
     static void trampoline(void* argument) noexcept;
     void run() noexcept;
