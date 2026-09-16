@@ -1,5 +1,6 @@
 #include "media/local/local_playback_controller.h"
 
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -7,7 +8,11 @@
 namespace media {
 
 LocalPlaybackController::LocalPlaybackController(AudioSink& sink, MediaModeController* mode)
-    : sink_(sink), mode_(mode), decode_buffer_(kPlaybackChunkFrames * 2, 0) {}
+    : sink_(sink), mode_(mode) {
+    // Allocated once; the audio path must never allocate per chunk.
+    decode_buffer_.allocate(kPlaybackChunkFrames * 2);
+    pending_pcm_.allocate(kPlaybackChunkFrames * 2);
+}
 
 void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav_bytes) {
     std::lock_guard<std::recursive_mutex> guard(mutex_);
@@ -16,7 +21,7 @@ void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav
     selected_bytes_ = std::move(wav_bytes);
     total_frames_ = 0;
     played_frames_ = 0;
-    pending_pcm_.clear();
+    pending_samples_ = 0;
     pending_offset_ = 0;
     error_.clear();
     decoder_eof_ = false;
@@ -32,7 +37,7 @@ void LocalPlaybackController::select(std::string title, std::unique_ptr<AudioStr
     decoder_ = std::move(decoder);
     total_frames_ = 0;
     played_frames_ = 0;
-    pending_pcm_.clear();
+    pending_samples_ = 0;
     pending_offset_ = 0;
     decoder_eof_ = false;
     error_.clear();
@@ -53,7 +58,7 @@ bool LocalPlaybackController::start() {
     }
     total_frames_ = 0;
     played_frames_ = 0;
-    pending_pcm_.clear();
+    pending_samples_ = 0;
     pending_offset_ = 0;
     state_machine_.transition(PlaybackState::Preparing);
     PcmFormat format{};
@@ -106,11 +111,11 @@ void LocalPlaybackController::pump() {
         return;
     }
 
-    if (pending_pcm_.empty()) {
+    if (pending_samples_ == 0) {
         // Decoder contract: PcmBlock capacity is frames, while this backing
         // buffer deliberately reserves up to two interleaved int16 samples per
         // frame until the compressed header reveals mono versus stereo.
-        std::vector<int16_t>& frames = decode_buffer_;
+        AudioBuffer& frames = decode_buffer_;
         size_t frame_count = 0;
         if (decoder_) {
             const size_t capacity = kPlaybackChunkFrames;
@@ -162,12 +167,14 @@ void LocalPlaybackController::pump() {
             }
         }
         const size_t channels = sink_channels_ == 0 ? 1 : sink_channels_;
-        pending_pcm_.assign(frames.begin(), frames.begin() + frame_count * channels);
+        // Copy into the pending buffer rather than reallocating it each chunk.
+        pending_samples_ = frame_count * channels;
+        std::memcpy(pending_pcm_.data(), frames.data(), pending_samples_ * sizeof(int16_t));
         pending_offset_ = 0;
     }
 
     const size_t channels = sink_channels_ == 0 ? 1 : sink_channels_;
-    const size_t pending_frames = (pending_pcm_.size() - pending_offset_) / channels;
+    const size_t pending_frames = (pending_samples_ - pending_offset_) / channels;
     const size_t written = sink_.write(pending_pcm_.data() + pending_offset_, pending_frames);
     if (written == 0 || written > pending_frames) {
         fail("Audio sink write failed");
@@ -182,11 +189,11 @@ void LocalPlaybackController::pump() {
         pcm_tap_->push(pending_pcm_.data() + pending_offset_, written * channels);
     }
     pending_offset_ += written * channels;
-    if (pending_offset_ != pending_pcm_.size()) {
+    if (pending_offset_ != pending_samples_) {
         return;
     }
 
-    pending_pcm_.clear();
+    pending_samples_ = 0;
     pending_offset_ = 0;
     if ((!decoder_ && reader_.remaining_frames() == 0) || (decoder_ && decoder_eof_)) {
         stop_pipeline();
@@ -246,7 +253,7 @@ void LocalPlaybackController::fail(std::string error) {
 }
 
 void LocalPlaybackController::stop_pipeline() {
-    pending_pcm_.clear();
+    pending_samples_ = 0;
     pending_offset_ = 0;
     if (state_machine_.state() == PlaybackState::Idle) {
         if (stream_) stream_->close();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "media/audio/audio_buffer.h"
 #include "media/audio/audio_sink.h"
 #include "media/decoder/audio_decoder.h"
 #include "media/decoder/audio_stream.h"
@@ -102,10 +103,12 @@ private:
     std::vector<uint8_t> selected_bytes_;
     size_t total_frames_ = 0;
     size_t played_frames_ = 0;
-    // Interleaved worst case is two samples per frame.  Heap, not stack: 8 KB
-    // of stereo PCM would not fit comfortably in the audio task's stack.
-    std::vector<int16_t> decode_buffer_;
-    std::vector<int16_t> pending_pcm_;
+    // Interleaved worst case is two samples per frame.  Not the stack (8 KB of
+    // stereo PCM does not belong in the audio task's stack) and not PSRAM
+    // (too slow for per-frame access; it starved the I2S DMA), so: internal RAM.
+    AudioBuffer decode_buffer_;
+    AudioBuffer pending_pcm_;
+    std::size_t pending_samples_ = 0;
     size_t pending_offset_ = 0;
     bool decoder_eof_ = false;
     std::string error_;
