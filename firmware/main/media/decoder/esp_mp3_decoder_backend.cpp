@@ -18,6 +18,7 @@ namespace media {
 EspMp3DecoderBackend::~EspMp3DecoderBackend() { reset_state(); }
 
 void EspMp3DecoderBackend::reset_state() noexcept {
+    skipped_bytes_ = 0;
     if (decoder_ != nullptr) {
         esp_mp3_dec_close(decoder_);
         decoder_ = nullptr;
@@ -39,9 +40,42 @@ AudioDecodeStatus EspMp3DecoderBackend::map_error(int error) const noexcept {
     return AudioDecodeStatus::Malformed;
 }
 
+std::size_t EspMp3DecoderBackend::skip_id3v2(AudioStream& stream) noexcept {
+    // An ID3v2 tag sits in front of the audio and can be tens of kilobytes when
+    // it carries cover art.  The decoder cannot find a frame inside it and
+    // reports a generic failure, so the tag is skipped here instead.
+    uint8_t header[10] = {};
+    std::size_t read = 0;
+    if (stream.read(header, sizeof(header), read) != AudioStreamStatus::Ok || read != sizeof(header)) {
+        return 0;
+    }
+    if (header[0] != 'I' || header[1] != 'D' || header[2] != '3') {
+        // No tag: rewind so the first frame is not swallowed.
+        stream.seek(0);
+        return 0;
+    }
+    // The size is four synchsafe bytes: seven significant bits each.
+    const std::size_t size = (static_cast<std::size_t>(header[6] & 0x7f) << 21) |
+                             (static_cast<std::size_t>(header[7] & 0x7f) << 14) |
+                             (static_cast<std::size_t>(header[8] & 0x7f) << 7) |
+                             static_cast<std::size_t>(header[9] & 0x7f);
+    const std::size_t total = sizeof(header) + size;
+    if (stream.seek(total) != AudioStreamStatus::Ok) {
+        stream.seek(0);
+        return 0;
+    }
+    return total;
+}
+
 AudioDecodeStatus EspMp3DecoderBackend::open(AudioStream& stream) noexcept {
     reset_state();
     if (!stream.is_open()) { error_ = AudioDecodeStatus::InvalidArgument; return error_; }
+    const std::size_t skipped = skip_id3v2(stream);
+#ifdef ESP_PLATFORM
+    if (skipped != 0) {
+        ESP_LOGI(TAG, "Skipped a %u byte ID3v2 tag", static_cast<unsigned>(skipped));
+    }
+#endif
     void* handle = nullptr;
     const auto result = esp_mp3_dec_open(nullptr, 0, &handle);
     if (result != ESP_AUDIO_ERR_OK || handle == nullptr) {
@@ -63,7 +97,7 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
     // channel count.  Never hand the codec a mono-sized buffer for stereo.
     const std::size_t output_bytes = block.capacity_frames * 2 * sizeof(int16_t);
 
-    for (unsigned attempt = 0; attempt < 4; ++attempt) {
+    for (unsigned attempt = 0; attempt < kMaxDecodeAttempts; ++attempt) {
         if (input_size_ == 0 && !source_eof_) {
             std::size_t count = 0;
             const auto status = stream_->read(input_.data(), input_.size(), count);
@@ -136,6 +170,15 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
                 error_ = AudioDecodeStatus::IoError; return error_;
             }
             continue;
+        }
+        if (consumed != 0 && !source_eof_) {
+            // The decoder made progress even though it produced nothing: it is
+            // still searching for a frame boundary, so give it more data rather
+            // than declaring the file broken.
+            skipped_bytes_ += consumed;
+            if (skipped_bytes_ <= kMaxSearchBytes) {
+                continue;
+            }
         }
 #ifdef ESP_PLATFORM
         ESP_LOGE(TAG, "Decode failed: codec status %d, consumed %u, buffered %u",

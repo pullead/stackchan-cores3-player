@@ -27,7 +27,15 @@ private:
     AudioDecodeStatus map_error(int error) const noexcept;
     void* decoder_ = nullptr;
     AudioStream* stream_ = nullptr;
+    // Junk before the first frame (leftover tag data, garbage) is tolerated up
+    // to this much before the file is called broken.
+    static constexpr std::size_t kMaxSearchBytes = 512 * 1024;
+    static constexpr unsigned kMaxDecodeAttempts = 64;
+
+    static std::size_t skip_id3v2(AudioStream& stream) noexcept;
+
     std::array<uint8_t, 16384> input_{};
+    std::size_t skipped_bytes_ = 0;
     std::size_t input_size_ = 0;
     bool source_eof_ = false;
     bool eof_ = false;
