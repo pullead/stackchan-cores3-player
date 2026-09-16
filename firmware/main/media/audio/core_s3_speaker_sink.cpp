@@ -30,6 +30,11 @@ bool CoreS3SpeakerSink::open(const PcmFormat& format) {
         return false;
     }
 
+    // Enabling the output re-applies the volume persisted in NVS, which would
+    // undo the mute above.  Re-assert it after the codec is open so the muted
+    // test policy cannot be defeated by a stored volume.
+    codec_.set_volume(kMutedVolumePercent);
+
     channels_ = format.channels;
     return true;
 }

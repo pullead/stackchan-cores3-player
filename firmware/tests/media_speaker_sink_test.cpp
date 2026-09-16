@@ -104,9 +104,12 @@ bool test_open_mutes_before_enabling() {
     media::CoreS3SpeakerSink sink(codec);
     const bool opened = sink.open(supported_format());
 
+    // Muted twice on purpose: EnableOutput() re-applies the volume stored in
+    // NVS, so the mute has to be re-asserted after the codec is open.
     return check(opened, "supported open succeeds") &&
            check(codec.volume() == media::kMutedVolumePercent, "open leaves volume muted") &&
-           check_calls(codec.calls(), {Call::Mute, Call::Enable}, "open calls mute then enable");
+           check_calls(codec.calls(), {Call::Mute, Call::Enable, Call::Mute},
+                       "open mutes, enables, then mutes again");
 }
 
 bool test_common_music_formats_are_accepted() {
@@ -184,7 +187,8 @@ bool test_closed_or_null_write_is_rejected() {
     const bool null_rejected = sink.write(nullptr, 1) == 0;
     return check(closed_rejected, "closed write returns zero") &&
            check(null_rejected, "null write returns zero") &&
-           check_calls(codec.calls(), {Call::Mute, Call::Enable}, "rejected writes do not reach codec");
+           check_calls(codec.calls(), {Call::Mute, Call::Enable, Call::Mute},
+                       "rejected writes do not reach codec");
 }
 
 bool test_failed_enable_stays_closed() {
