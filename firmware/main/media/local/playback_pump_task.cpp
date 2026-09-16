@@ -2,6 +2,7 @@
 
 #ifdef ESP_PLATFORM
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #define TAG "MediaPump"
 #endif
@@ -12,17 +13,54 @@ PlaybackPumpTask::~PlaybackPumpTask() { stop(); }
 
 void PlaybackPumpTask::run() noexcept {
     running_.store(true, std::memory_order_release);
+#ifdef ESP_PLATFORM
+    // Delivered frames against wall-clock time is the objective check that the
+    // retimed I2S clock is right: a 44.1 kHz track must consume 44100 frames
+    // per second.  A drifting ratio means wrong pitch; a stalling one means
+    // dropouts.  Both are invisible during a muted test without this.
+    int64_t measure_start_us = 0;
+    size_t measure_start_frames = 0;
+    int64_t last_report_us = 0;
+    bool measuring = false;
+#endif
     while (true) {
+        const LocalPlaybackSnapshot snapshot = controller_.snapshot();
         const PumpAction action =
-            next_pump_action(controller_.snapshot().state, stop_requested_.load(std::memory_order_acquire));
+            next_pump_action(snapshot.state, stop_requested_.load(std::memory_order_acquire));
         if (action == PumpAction::Exit) {
             break;
         }
         if (action == PumpAction::Pump) {
+#ifdef ESP_PLATFORM
+            const int64_t now_us = esp_timer_get_time();
+            if (!measuring && snapshot.state == PlaybackState::Playing) {
+                measuring = true;
+                measure_start_us = now_us;
+                measure_start_frames = snapshot.played_frames;
+                last_report_us = now_us;
+            } else if (measuring && now_us - last_report_us >= 5000000) {
+                const int64_t elapsed_us = now_us - measure_start_us;
+                const size_t frames = snapshot.played_frames - measure_start_frames;
+                const int64_t rate = elapsed_us > 0 ? (static_cast<int64_t>(frames) * 1000000) / elapsed_us : 0;
+                ESP_LOGI(TAG, "Delivered %u frames in %lld ms -> %lld frames/s",
+                         static_cast<unsigned>(frames), elapsed_us / 1000, rate);
+                last_report_us = now_us;
+            }
+#endif
             // Blocks inside the sink on I2S DMA, which paces the loop.
             controller_.pump();
             continue;
         }
+#ifdef ESP_PLATFORM
+        if (measuring) {
+            const int64_t elapsed_us = esp_timer_get_time() - measure_start_us;
+            const size_t frames = snapshot.played_frames - measure_start_frames;
+            const int64_t rate = elapsed_us > 0 ? (static_cast<int64_t>(frames) * 1000000) / elapsed_us : 0;
+            ESP_LOGI(TAG, "Playback ended: %u frames in %lld ms -> %lld frames/s",
+                     static_cast<unsigned>(frames), elapsed_us / 1000, rate);
+            measuring = false;
+        }
+#endif
 #ifdef ESP_PLATFORM
         vTaskDelay(pdMS_TO_TICKS(kIdleDelayMs));
 #else

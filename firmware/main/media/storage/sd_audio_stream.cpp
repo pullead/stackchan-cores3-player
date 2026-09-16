@@ -4,6 +4,12 @@
 #include <cstring>
 #include <utility>
 
+#ifdef ESP_PLATFORM
+#include <esp_log.h>
+
+#define TAG "SdAudioStream"
+#endif
+
 namespace media {
 
 SdAudioStream::SdAudioStream(board::Spi3DisplayHandoff& handoff,
@@ -171,6 +177,14 @@ AudioStreamStatus SdAudioStream::close() noexcept {
             mounted_ = false;
         }
     }
+
+#ifdef ESP_PLATFORM
+    // How often the display bus had to be taken away.  Should track prefetches
+    // (file size / prefetch size), not decoder reads; a number close to the
+    // read count would mean the screen is being blocked continuously.
+    ESP_LOGI(TAG, "Closed after %u bus borrows, %llu bytes delivered",
+             static_cast<unsigned>(borrow_count_), static_cast<unsigned long long>(position_));
+#endif
 
     file_ = nullptr;
     open_ = false;
