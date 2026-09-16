@@ -159,6 +159,11 @@ constexpr char kTag[] = "SdCardPort";
 // LCD D/C, so a slow read separates signal-integrity/edge timing issues from
 // filesystem and directory logic without writing to the card.
 constexpr int kSdDiagnosticClockKHz = SDMMC_FREQ_PROBING;
+// Playback needs real throughput.  The probing clock caps the card at roughly
+// 50 KB/s, which cannot keep even a 320 kbps MP3 fed and made playback run at
+// about half speed.  Mount fast and fall back to probing if the shared
+// GPIO35 bus turns out not to tolerate it.
+constexpr int kSdPlaybackClockKHz = SDMMC_FREQ_DEFAULT;
 
 bool ensure_sd_bus(std::string& error) {
     static bool initialized = false;
@@ -433,9 +438,6 @@ bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
         return false;
     }
 
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = kSdHost;
-    host.max_freq_khz = kSdDiagnosticClockKHz;
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.host_id = kSdHost;
     slot_config.gpio_cs = kSdChipSelectPin;
@@ -446,8 +448,22 @@ bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
     mount_config.max_files = 4;
 
     sdmmc_card_t* card = nullptr;
-    ESP_LOGI(kTag, "TF browse-only mount at %d kHz", kSdDiagnosticClockKHz);
-    const esp_err_t result = esp_vfs_fat_sdspi_mount(kMountPath, &host, &slot_config, &mount_config, &card);
+    esp_err_t result = ESP_FAIL;
+    for (const int clock_khz : {kSdPlaybackClockKHz, kSdDiagnosticClockKHz}) {
+        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+        host.slot = kSdHost;
+        host.max_freq_khz = clock_khz;
+
+        ESP_LOGI(kTag, "TF browse-only mount at %d kHz", clock_khz);
+        result = esp_vfs_fat_sdspi_mount(kMountPath, &host, &slot_config, &mount_config, &card);
+        if (result == ESP_OK) {
+            ESP_LOGI(kTag, "TF mounted at %d kHz, real clock %d kHz", clock_khz,
+                     card != nullptr ? card->real_freq_khz : 0);
+            break;
+        }
+        ESP_LOGW(kTag, "TF mount at %d kHz failed: %s", clock_khz, esp_err_to_name(result));
+    }
+
     if (result != ESP_OK) {
         error = esp_err_to_name(result);
         const std::string raw_description = raw_card_diagnostic();
