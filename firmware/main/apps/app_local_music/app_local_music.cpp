@@ -1,5 +1,7 @@
 #include "app_local_music.h"
 
+#include "hifi_theme.h"
+
 #include <assets/assets.h>
 #include <audio/audio_codec.h>
 #include <board.h>
@@ -9,19 +11,42 @@
 #include <media/decoder/hifi_decoder_adapter.h>
 #include <mooncake_log.h>
 
+#include <cstdio>
+
 using namespace smooth_ui_toolkit::lvgl_cpp;
 
-// Montserrat is intentionally kept for the compact English chrome, but it has
-// no CJK glyphs. The Puhui 14px font is already part of the firmware font
-// component and covers the UTF-8 filenames returned by FatFs.
+// The Puhui font ships with this firmware and covers the UTF-8 filenames FatFs
+// returns.  Upstream uses a 13px Noto Sans SC subset, which is an LVGL 8 font
+// binary and cannot be loaded here; 14px is the closest available match.
 LV_FONT_DECLARE(font_puhui_14_1);
 
 namespace {
 
-constexpr uint32_t kBackground = 0xF1F7F5;
-constexpr uint32_t kPrimary = 0x113F3A;
-constexpr uint32_t kSecondary = 0x3D665F;
-constexpr uint32_t kAccent = 0xA9DDD1;
+constexpr const char* kTabLabels[hifi_theme::kTabCount] = {"歌曲", "歌手", "专辑", "今日", "★"};
+
+const lv_font_t* body_font() { return &font_puhui_14_1; }
+
+lv_obj_t* make_text(lv_obj_t* parent, const char* text, lv_color_t colour, lv_align_t align,
+                    int32_t x, int32_t y) {
+    lv_obj_t* label = lv_label_create(parent);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, body_font(), 0);
+    lv_obj_set_style_text_color(label, colour, 0);
+    lv_obj_align(label, align, x, y);
+    lv_obj_remove_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    return label;
+}
+
+// Chips, rows and buttons all share this flat, borderless treatment.
+void style_flat(lv_obj_t* object, lv_color_t colour, int32_t radius) {
+    lv_obj_set_style_radius(object, radius, 0);
+    lv_obj_set_style_bg_color(object, colour, 0);
+    lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(object, 0, 0);
+    lv_obj_set_style_shadow_width(object, 0, 0);
+    lv_obj_set_style_pad_all(object, 0, 0);
+    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+}
 
 }  // namespace
 
@@ -33,9 +58,7 @@ AppLocalMusic::AppLocalMusic() {
     setAppInfo().userData = &theme_color;
 }
 
-void AppLocalMusic::onCreate() {
-    mclog::tagInfo(getAppInfo().name, "on create");
-}
+void AppLocalMusic::onCreate() { mclog::tagInfo(getAppInfo().name, "on create"); }
 
 void AppLocalMusic::onOpen() {
     mclog::tagInfo(getAppInfo().name, "on open");
@@ -54,7 +77,8 @@ void AppLocalMusic::onOpen() {
         } else {
             mclog::tagWarn(getAppInfo().name, "codec cannot be retimed for media playback");
         }
-        speaker_sink_ = std::make_unique<media::CoreS3SpeakerSink>(*codec_port_, audio_session_.get());
+        speaker_sink_ =
+            std::make_unique<media::CoreS3SpeakerSink>(*codec_port_, audio_session_.get());
         playback_ = std::make_unique<media::LocalPlaybackController>(*speaker_sink_);
         pump_task_ = std::make_unique<media::PlaybackPumpTask>(*playback_);
         if (!pump_task_->start()) {
@@ -67,53 +91,21 @@ void AppLocalMusic::onOpen() {
 
     {
         LvglLockGuard lock;
-        create_view();
-        render({"SCANNING SD CARD", "BROWSE ONLY - MUTED", {}});
+        build_list_page();
     }
 
     // browse_tracks() owns the display/SD handoff and therefore runs without an
-    // application-level LVGL lock. It also unmounts before returning.
+    // application-level LVGL lock.  It also unmounts before returning.
     tracks_ = sd_card_.browse_tracks();
-    const auto view = local_music::make_browse_view(tracks_, sd_card_.last_error());
 
     LvglLockGuard lock;
-    render(view);
+    build_list_page();
 }
 
 void AppLocalMusic::onRunning() {
     // Runs outside LVGL event dispatch, so rebuilding the page is safe here.
     apply_pending_action();
-
-    // Decoding happens on the media pump task; this only mirrors its state.
-    if (!playback_ || !playback_view_ || !detail_) {
-        return;
-    }
-
-    // tick() is lock-free: taking the controller mutex here would mean waiting
-    // for the audio task to finish a whole chunk, so the clock would advance in
-    // multi-second jumps instead of smoothly.
-    const auto tick = playback_->tick();
-    const std::string status = playback_status(tick.state);
-    // Elapsed time is the only on-screen evidence that a muted track is
-    // actually advancing rather than stuck.
-    std::string elapsed = "--:--";
-    if (tick.sample_rate > 0) {
-        const uint32_t seconds = tick.played_frames / tick.sample_rate;
-        elapsed = std::to_string(seconds / 60) + ":" +
-                  (seconds % 60 < 10 ? "0" : "") + std::to_string(seconds % 60);
-        elapsed += "  @" + std::to_string(tick.sample_rate) + "Hz";
-    }
-
-    if (status == shown_status_ && elapsed == shown_elapsed_) {
-        return;
-    }
-    shown_status_ = status;
-    shown_elapsed_ = elapsed;
-    LvglLockGuard lock;
-    detail_->setText(shown_status_);
-    if (playback_progress_) {
-        playback_progress_->setText(shown_elapsed_);
-    }
+    refresh_player_page();
 }
 
 void AppLocalMusic::onClose() {
@@ -128,19 +120,12 @@ void AppLocalMusic::onClose() {
     }
     GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
 
-    LvglLockGuard lock;
-    back_.reset();
-    playback_note_.reset();
-    playback_progress_.reset();
-    playback_name_.reset();
-    track_rows_.clear();
-    track_list_.reset();
+    {
+        LvglLockGuard lock;
+        destroy_page();
+    }
     tracks_.clear();
-    detail_.reset();
-    heading_.reset();
-    title_.reset();
-    panel_.reset();
-    playback_view_ = false;
+    player_page_ = false;
     pending_action_ = PendingAction::None;
     selected_title_.clear();
     shown_status_.clear();
@@ -155,87 +140,181 @@ void AppLocalMusic::onClose() {
     codec_port_.reset();
 }
 
-void AppLocalMusic::create_view() {
-    panel_ = std::make_unique<Container>(lv_screen_active());
-    panel_->setSize(320, 240);
-    panel_->align(LV_ALIGN_CENTER, 0, 0);
-    panel_->setBgColor(lv_color_hex(kBackground));
-    panel_->setBorderWidth(0);
-    panel_->setRadius(0);
-    panel_->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-
-    title_ = std::make_unique<Label>(*panel_);
-    title_->setText("LOCAL MUSIC");
-    title_->setTextFont(&lv_font_montserrat_20);
-    title_->setTextColor(lv_color_hex(kPrimary));
-    title_->align(LV_ALIGN_TOP_MID, 0, 4);
-
-    heading_ = std::make_unique<Label>(*panel_);
-    heading_->setTextFont(&font_puhui_14_1);
-    heading_->setTextColor(lv_color_hex(kPrimary));
-    heading_->setWidth(292);
-    heading_->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    heading_->align(LV_ALIGN_TOP_MID, 0, 28);
-
-    detail_ = std::make_unique<Label>(*panel_);
-    detail_->setTextFont(&font_puhui_14_1);
-    detail_->setTextColor(lv_color_hex(kSecondary));
-    detail_->setWidth(286);
-    detail_->setLongMode(LV_LABEL_LONG_SCROLL_CIRCULAR);
-    detail_->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    detail_->align(LV_ALIGN_TOP_MID, 0, 48);
-
-    track_list_ = std::make_unique<Container>(*panel_);
-    track_list_->setSize(292, 122);
-    track_list_->align(LV_ALIGN_TOP_MID, 0, 66);
-    track_list_->setBgOpa(LV_OPA_TRANSP);
-    track_list_->setBorderWidth(0);
-    track_list_->setRadius(0);
-    track_list_->setPadding(2, 2, 0, 0);
-    track_list_->setFlexFlow(LV_FLEX_FLOW_COLUMN);
-    track_list_->setFlexAlign(LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    track_list_->setPadRow(4);
-    track_list_->setScrollDir(LV_DIR_VER);
-    track_list_->setScrollbarMode(LV_SCROLLBAR_MODE_ACTIVE);
-
-    back_ = std::make_unique<Button>(*panel_);
-    back_->setSize(104, 34);
-    back_->align(LV_ALIGN_BOTTOM_MID, 0, -6);
-    back_->setBgColor(lv_color_hex(kAccent));
-    back_->setBorderWidth(0);
-    back_->setShadowWidth(0);
-    back_->setRadius(12);
-    back_->label().setText("BACK");
-    back_->label().setTextFont(&lv_font_montserrat_16);
-    back_->label().setTextColor(lv_color_hex(kPrimary));
-    back_->onClick().connect([this]() { close(); });
+void AppLocalMusic::destroy_page() {
+    if (root_ != nullptr) {
+        lv_obj_delete(root_);
+        root_ = nullptr;
+    }
+    list_ = nullptr;
+    scroll_slider_ = nullptr;
+    status_label_ = nullptr;
+    player_title_ = nullptr;
+    player_elapsed_ = nullptr;
+    player_state_ = nullptr;
 }
 
-void AppLocalMusic::render(const local_music::BrowseView& view) {
-    playback_view_ = false;
-    heading_->setText(view.heading);
-    detail_->setText(view.detail);
+void AppLocalMusic::build_list_page() {
+    destroy_page();
+    player_page_ = false;
 
-    track_rows_.clear();
-    for (std::size_t index = 0; index < view.rows.size(); ++index) {
-        auto row = std::make_unique<Button>(*track_list_);
-        row->label().setText(std::to_string(index + 1) + ".  " + view.rows[index]);
-        row->label().setTextFont(&font_puhui_14_1);
-        row->label().setTextColor(lv_color_hex(kPrimary));
-        row->setBgColor(lv_color_hex(kBackground));
-        row->setBorderWidth(0);
-        row->setShadowWidth(0);
-        row->setRadius(4);
-        row->setWidth(276);
-        row->setHeight(22);
-        // Record the intent only; acting here would destroy this very button
-        // and leave the rest of the handler running on freed memory.
-        row->onClick().connect([this, index]() {
-            pending_action_ = PendingAction::SelectTrack;
-            pending_index_ = index;
-        });
-        track_rows_.push_back(std::move(row));
+    root_ = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(root_, hifi_theme::kScreenWidth, hifi_theme::kScreenHeight);
+    lv_obj_align(root_, LV_ALIGN_CENTER, 0, 0);
+    style_flat(root_, hifi_theme::bg(), 0);
+
+    // No status bar on this page: upstream dropped it because the list is
+    // scrolled constantly and the ~20px matters more than a persistent
+    // clock/WiFi readout.
+    for (int32_t i = 0; i < hifi_theme::kTabCount; ++i) {
+        const bool selected = static_cast<int32_t>(tab_) == i;
+        lv_obj_t* tab = lv_button_create(root_);
+        lv_obj_set_pos(tab, hifi_theme::kTabX + i * hifi_theme::kTabPitch, hifi_theme::kTabY);
+        lv_obj_set_size(tab, hifi_theme::kTabWidth, hifi_theme::kTabHeight);
+        style_flat(tab, selected ? hifi_theme::accent_deep() : hifi_theme::panel(),
+                   hifi_theme::kTabRadius);
+        lv_obj_set_user_data(tab, this);
+        lv_obj_add_event_cb(tab, on_tab_clicked, LV_EVENT_CLICKED,
+                            reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+        make_text(tab, kTabLabels[i], selected ? hifi_theme::ink() : hifi_theme::ink_dim(),
+                  LV_ALIGN_CENTER, 0, 0);
     }
+
+    char header[32] = {};
+    std::snprintf(header, sizeof(header), "共 %u 首", static_cast<unsigned>(tracks_.size()));
+    status_label_ = make_text(root_, header, hifi_theme::ink_dim(), LV_ALIGN_TOP_RIGHT, -10, 6);
+
+    list_ = lv_obj_create(root_);
+    lv_obj_set_pos(list_, hifi_theme::kListX, hifi_theme::kListY);
+    lv_obj_set_size(list_, hifi_theme::kListWidth, hifi_theme::kListHeight);
+    lv_obj_set_style_bg_opa(list_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(list_, 0, 0);
+    lv_obj_set_style_pad_all(list_, 0, 0);
+    lv_obj_set_style_radius(list_, 0, 0);
+    lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(list_, LV_DIR_VER);
+    // Replaced by the draggable slider below: LVGL's own scrollbar is an
+    // indicator only, not something a finger can grab.
+    lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_OFF);
+
+    if (tab_ != Tab::Songs) {
+        // Artists/Albums/Today/Favourites need ID3 tags, import timestamps and
+        // favourites, none of which the scanner collects yet.  Say so instead
+        // of showing an empty list that looks like a failure.
+        make_text(list_, "该分类需要曲库信息", hifi_theme::ink_dim(), LV_ALIGN_CENTER, 0, 0);
+        return;
+    }
+    if (tracks_.empty()) {
+        make_text(list_, "未找到音乐文件", hifi_theme::ink_dim(), LV_ALIGN_CENTER, 0, 0);
+        return;
+    }
+
+    int32_t row_y = 0;
+    for (std::size_t i = 0; i < tracks_.size(); ++i) {
+        lv_obj_t* row = lv_button_create(list_);
+        lv_obj_set_pos(row, 0, row_y);
+        lv_obj_set_size(row, hifi_theme::kRowWidth, hifi_theme::kRowHeight);
+        style_flat(row, hifi_theme::panel(), hifi_theme::kRowRadius);
+        lv_obj_set_user_data(row, this);
+        lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED,
+                            reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+
+        // Single line: title on the left, artist on the right and dimmer.  Not
+        // joined into "title · artist" -- in CJK that separator smears into the
+        // glyphs, and two labels read more clearly for the same glyph count.
+        const char* title = tracks_[i].title.empty() ? "未知曲目" : tracks_[i].title.c_str();
+        lv_obj_t* title_label = make_text(row, title, hifi_theme::ink(), LV_ALIGN_LEFT_MID, 10, 0);
+        lv_label_set_long_mode(title_label, LV_LABEL_LONG_DOT);
+        // LV_LABEL_LONG_DOT wraps by width and only ellipsises once the text
+        // exceeds the label's HEIGHT, so the height has to be pinned to one
+        // line or long titles silently become two cramped rows.
+        lv_obj_set_size(title_label, 170, lv_font_get_line_height(body_font()));
+
+        // Artist metadata is not read yet; the slot is kept so the layout does
+        // not shift once ID3 parsing lands.
+        lv_obj_t* detail =
+            make_text(row, "未知艺术家", hifi_theme::ink_faint(), LV_ALIGN_RIGHT_MID, -24, 0);
+        lv_label_set_long_mode(detail, LV_LABEL_LONG_DOT);
+        lv_obj_set_size(detail, 76, lv_font_get_line_height(body_font()));
+        lv_obj_set_style_text_align(detail, LV_TEXT_ALIGN_RIGHT, 0);
+
+        row_y += hifi_theme::kRowPitch;
+    }
+
+    if (row_y > hifi_theme::kListHeight) {
+        scroll_slider_ = lv_slider_create(root_);
+        lv_obj_set_pos(scroll_slider_, hifi_theme::kScrollSliderX, hifi_theme::kListY);
+        lv_obj_set_size(scroll_slider_, hifi_theme::kScrollSliderWidth, hifi_theme::kListHeight);
+        lv_slider_set_range(scroll_slider_, 0, row_y - hifi_theme::kListHeight);
+        lv_obj_set_style_bg_color(scroll_slider_, hifi_theme::panel_deep(), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(scroll_slider_, hifi_theme::accent_deep(), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(scroll_slider_, hifi_theme::accent_bright(), LV_PART_KNOB);
+        lv_obj_set_user_data(scroll_slider_, this);
+        lv_obj_add_event_cb(scroll_slider_, on_scroll_slider, LV_EVENT_VALUE_CHANGED, nullptr);
+    }
+}
+
+void AppLocalMusic::build_player_page() {
+    destroy_page();
+    player_page_ = true;
+
+    root_ = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(root_, hifi_theme::kScreenWidth, hifi_theme::kScreenHeight);
+    lv_obj_align(root_, LV_ALIGN_CENTER, 0, 0);
+    style_flat(root_, hifi_theme::bg(), 0);
+
+    make_text(root_, "正在播放", hifi_theme::ink_dim(), LV_ALIGN_TOP_MID, 0, 8);
+
+    player_title_ =
+        make_text(root_, selected_title_.c_str(), hifi_theme::ink(), LV_ALIGN_TOP_MID, 0, 34);
+    lv_label_set_long_mode(player_title_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_width(player_title_, 286);
+    lv_obj_set_style_text_align(player_title_, LV_TEXT_ALIGN_CENTER, 0);
+
+    player_elapsed_ = make_text(root_, "--:--", hifi_theme::ink_dim(), LV_ALIGN_TOP_MID, 0, 70);
+    player_state_ = make_text(root_, "", hifi_theme::accent_bright(), LV_ALIGN_TOP_MID, 0, 96);
+
+    lv_obj_t* back = lv_button_create(root_);
+    lv_obj_set_size(back, 120, 34);
+    lv_obj_align(back, LV_ALIGN_BOTTOM_MID, 0, -10);
+    style_flat(back, hifi_theme::panel(), 12);
+    lv_obj_set_user_data(back, this);
+    lv_obj_add_event_cb(back, on_back_clicked, LV_EVENT_CLICKED, nullptr);
+    make_text(back, "返回列表", hifi_theme::ink(), LV_ALIGN_CENTER, 0, 0);
+}
+
+void AppLocalMusic::on_tab_clicked(lv_event_t* event) {
+    auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
+    if (self == nullptr) return;
+    const auto index = reinterpret_cast<uintptr_t>(lv_event_get_user_data(event));
+    self->pending_tab_ = static_cast<Tab>(index);
+    self->pending_action_ = PendingAction::SwitchTab;
+}
+
+void AppLocalMusic::on_row_clicked(lv_event_t* event) {
+    auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
+    if (self == nullptr) return;
+    self->pending_index_ = reinterpret_cast<uintptr_t>(lv_event_get_user_data(event));
+    self->pending_action_ = PendingAction::SelectTrack;
+}
+
+void AppLocalMusic::on_back_clicked(lv_event_t* event) {
+    auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
+    if (self == nullptr) return;
+    self->pending_action_ = PendingAction::BackToList;
+}
+
+void AppLocalMusic::on_scroll_slider(lv_event_t* event) {
+    auto* slider = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(slider));
+    if (self == nullptr || self->list_ == nullptr) return;
+    // The slider grows upwards from the bottom while scroll_y grows downwards
+    // from the top, so the value is inverted rather than mapped one to one.
+    const int32_t range = lv_slider_get_max_value(slider);
+    const int32_t value = lv_slider_get_value(slider);
+    lv_obj_scroll_to_y(self->list_, range - value, LV_ANIM_OFF);
 }
 
 void AppLocalMusic::apply_pending_action() {
@@ -252,7 +331,13 @@ void AppLocalMusic::apply_pending_action() {
             playback_->stop();
         }
         LvglLockGuard lock;
-        show_list();
+        build_list_page();
+        return;
+    }
+    if (action == PendingAction::SwitchTab) {
+        tab_ = pending_tab_;
+        LvglLockGuard lock;
+        build_list_page();
         return;
     }
     select_track(pending_index_);
@@ -265,12 +350,11 @@ void AppLocalMusic::select_track(std::size_t index) {
     }
 
     selected_title_ = tracks_[index].title;
+    shown_status_.clear();
+    shown_elapsed_.clear();
     {
-        // Always enter the player page so a selected track has a clear
-        // destination.  The page reports backend availability honestly; it
-        // must never show a fake Playing state.
         LvglLockGuard lock;
-        render_playback(selected_title_, "PREPARING / MUTED");
+        build_player_page();
     }
 
     // Opening the stream borrows the display bus, so it must not be done while
@@ -279,128 +363,82 @@ void AppLocalMusic::select_track(std::size_t index) {
     auto* backend = media::create_hifi_decoder_backend();
     if (!stream || backend == nullptr || !playback_) {
         LvglLockGuard lock;
-        detail_->setText("DECODER UNAVAILABLE / MUTED");
+        if (player_state_ != nullptr) lv_label_set_text(player_state_, "解码器不可用");
         return;
     }
 
     auto decoder = std::make_unique<media::HifiDecoderAdapter>(*backend);
     playback_->select(selected_title_, std::move(stream), std::move(decoder));
     playback_->start();
+}
 
-    const std::string status = playback_status();
+void AppLocalMusic::refresh_player_page() {
+    if (!playback_ || !player_page_ || player_state_ == nullptr) {
+        return;
+    }
+
+    // tick() is lock-free: taking the controller mutex here would mean waiting
+    // for the audio task to finish a whole chunk, so the clock would advance in
+    // multi-second jumps instead of smoothly.
+    const auto tick = playback_->tick();
+    const std::string status = playback_status(tick.state);
+
+    std::string elapsed = "--:--";
+    if (tick.sample_rate > 0) {
+        const uint32_t seconds = tick.played_frames / tick.sample_rate;
+        char buffer[32] = {};
+        std::snprintf(buffer, sizeof(buffer), "%u:%02u  @%uHz", static_cast<unsigned>(seconds / 60),
+                      static_cast<unsigned>(seconds % 60), static_cast<unsigned>(tick.sample_rate));
+        elapsed = buffer;
+    }
+
+    if (status == shown_status_ && elapsed == shown_elapsed_) {
+        return;
+    }
     shown_status_ = status;
+    shown_elapsed_ = elapsed;
+
     LvglLockGuard lock;
-    detail_->setText(status);
-}
-
-void AppLocalMusic::render_playback(const std::string& title, const std::string& status) {
-    playback_view_ = true;
-    playback_note_.reset();
-    playback_progress_.reset();
-    playback_name_.reset();
-    track_rows_.clear();
-    track_list_.reset();
-    heading_->setText("NOW PLAYING");
-    detail_->setText(status);
-
-    playback_name_ = std::make_unique<Label>(*panel_);
-    playback_name_->setText(title);
-    playback_name_->setTextFont(&font_puhui_14_1);
-    playback_name_->setTextColor(lv_color_hex(kPrimary));
-    playback_name_->setWidth(286);
-    playback_name_->setLongMode(LV_LABEL_LONG_SCROLL_CIRCULAR);
-    playback_name_->setTextAlign(LV_TEXT_ALIGN_CENTER);
-    playback_name_->align(LV_ALIGN_TOP_MID, 0, 78);
-
-    playback_progress_ = std::make_unique<Label>(*panel_);
-    playback_progress_->setText("--:-- / --:--");
-    playback_progress_->setTextFont(&lv_font_montserrat_16);
-    playback_progress_->setTextColor(lv_color_hex(kSecondary));
-    playback_progress_->align(LV_ALIGN_TOP_MID, 0, 112);
-
-    playback_note_ = std::make_unique<Label>(*panel_);
-    playback_note_->setText("COVER  /  LYRICS  /  SPECTRUM PENDING");
-    playback_note_->setTextFont(&font_puhui_14_1);
-    playback_note_->setTextColor(lv_color_hex(kSecondary));
-    playback_note_->align(LV_ALIGN_TOP_MID, 0, 142);
-
-    auto back = std::make_unique<Button>(*panel_);
-    back->setSize(120, 34);
-    back->align(LV_ALIGN_BOTTOM_MID, 0, -6);
-    back->setBgColor(lv_color_hex(kAccent));
-    back->setBorderWidth(0);
-    back->setShadowWidth(0);
-    back->setRadius(12);
-    back->label().setText("BACK TO LIST");
-    back->label().setTextFont(&font_puhui_14_1);
-    back->label().setTextColor(lv_color_hex(kPrimary));
-    back->onClick().connect([this]() { pending_action_ = PendingAction::BackToList; });
-
-    back_ = std::move(back);
-}
-
-void AppLocalMusic::show_list() {
-    // Caller holds the LVGL lock and has already stopped playback.
-    if (!panel_) return;
-    back_.reset();
-    playback_note_.reset();
-    playback_progress_.reset();
-    playback_name_.reset();
-    // Recreate the list container and buttons using the already scanned tracks.
-    track_list_ = std::make_unique<Container>(*panel_);
-    track_list_->setSize(292, 122);
-    track_list_->align(LV_ALIGN_TOP_MID, 0, 66);
-    track_list_->setBgOpa(LV_OPA_TRANSP);
-    track_list_->setBorderWidth(0);
-    track_list_->setRadius(0);
-    track_list_->setPadding(2, 2, 0, 0);
-    track_list_->setFlexFlow(LV_FLEX_FLOW_COLUMN);
-    track_list_->setFlexAlign(LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    track_list_->setPadRow(4);
-    track_list_->setScrollDir(LV_DIR_VER);
-    track_list_->setScrollbarMode(LV_SCROLLBAR_MODE_ACTIVE);
-    back_ = std::make_unique<Button>(*panel_);
-    back_->setSize(104, 34);
-    back_->align(LV_ALIGN_BOTTOM_MID, 0, -6);
-    back_->label().setText("BACK");
-    back_->onClick().connect([this]() { close(); });
-    render(local_music::make_browse_view(tracks_, sd_card_.last_error()));
+    lv_label_set_text(player_state_, shown_status_.c_str());
+    if (player_elapsed_ != nullptr) {
+        lv_label_set_text(player_elapsed_, shown_elapsed_.c_str());
+    }
 }
 
 std::string AppLocalMusic::playback_status() const {
-    return playback_ ? playback_status(playback_->tick().state) : "AUDIO UNAVAILABLE / MUTED";
+    return playback_ ? playback_status(playback_->tick().state) : "音频不可用";
 }
 
 std::string AppLocalMusic::playback_status(media::PlaybackState state) const {
     if (!playback_) {
-        return "AUDIO UNAVAILABLE / MUTED";
+        return "音频不可用";
     }
 
     // Only the error path pays for the lock: it is rare and needs the text.
     if (state == media::PlaybackState::Error) {
         const auto snapshot = playback_->snapshot();
         if (!snapshot.error.empty()) {
-            return snapshot.error + " / MUTED";
+            return snapshot.error;
         }
     }
 
     switch (state) {
         case media::PlaybackState::Preparing:
-            return "PREPARING / MUTED";
+            return "准备中";
         case media::PlaybackState::Buffering:
-            return "BUFFERING / MUTED";
+            return "缓冲中";
         case media::PlaybackState::Playing:
-            return "PLAYING / MUTED";
+            return "播放中（静音）";
         case media::PlaybackState::Paused:
-            return "PAUSED / MUTED";
+            return "已暂停";
         case media::PlaybackState::PreparingForAi:
-            return "AI HANDOFF / MUTED";
+            return "交还语音";
         case media::PlaybackState::Stopping:
-            return "STOPPING / MUTED";
+            return "停止中";
         case media::PlaybackState::Error:
-            return "PLAYBACK ERROR / MUTED";
+            return "播放错误";
         case media::PlaybackState::Idle:
         default:
-            return "IDLE / MUTED";
+            return "就绪";
     }
 }

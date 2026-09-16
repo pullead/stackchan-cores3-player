@@ -16,6 +16,12 @@
 #include <mooncake.h>
 #include <smooth_lvgl.hpp>
 
+// Local music player, reproducing the esp32-hifi player's look and behaviour.
+//
+// The widgets are built with the plain LVGL 9 API rather than the C++ wrapper
+// used elsewhere in this firmware: the upstream layout is specified down to
+// individual pixel offsets, and matching it is easier against the same API
+// shape it was written for.
 class AppLocalMusic : public mooncake::AppAbility {
 public:
     AppLocalMusic();
@@ -26,20 +32,30 @@ public:
     void onClose() override;
 
 private:
+    // Browse dimensions, mirroring the upstream tab strip.  Songs is backed by
+    // the SD scan today; the others need library metadata that is not collected
+    // yet, and say so rather than showing a silently empty list.
+    enum class Tab : uint8_t { Songs, Artists, Albums, Today, Favourites };
+
     // A click handler must not destroy the widget it was invoked from: the
     // closure dies with the button and the rest of the handler would run on
     // freed memory.  Clicks therefore only record an intent, which onRunning()
     // carries out once LVGL has finished dispatching the event.
-    enum class PendingAction : uint8_t { None, SelectTrack, BackToList };
+    enum class PendingAction : uint8_t { None, SelectTrack, BackToList, SwitchTab };
 
-    void create_view();
+    void build_list_page();
+    void build_player_page();
+    void destroy_page();
     void apply_pending_action();
     void select_track(std::size_t index);
-    void render(const local_music::BrowseView& view);
-    void render_playback(const std::string& title, const std::string& status);
-    void show_list();
+    void refresh_player_page();
     std::string playback_status() const;
     std::string playback_status(media::PlaybackState state) const;
+
+    static void on_tab_clicked(lv_event_t* event);
+    static void on_row_clicked(lv_event_t* event);
+    static void on_back_clicked(lv_event_t* event);
+    static void on_scroll_slider(lv_event_t* event);
 
     media::SdCardPort sd_card_;
     std::unique_ptr<media::BoardAudioCodecPort> codec_port_;
@@ -52,21 +68,23 @@ private:
     // throttle the decoder.
     std::unique_ptr<media::PlaybackPumpTask> pump_task_;
 
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> panel_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> title_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> heading_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> detail_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> track_list_;
-    std::vector<std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button>> track_rows_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> playback_name_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> playback_progress_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> playback_note_;
     std::vector<media::SdTrack> tracks_;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Button> back_;
-    bool playback_view_ = false;
+
+    // One root per page; deleting it takes every child with it.
+    lv_obj_t* root_ = nullptr;
+    lv_obj_t* list_ = nullptr;
+    lv_obj_t* scroll_slider_ = nullptr;
+    lv_obj_t* status_label_ = nullptr;
+    lv_obj_t* player_title_ = nullptr;
+    lv_obj_t* player_elapsed_ = nullptr;
+    lv_obj_t* player_state_ = nullptr;
+
+    Tab tab_ = Tab::Songs;
+    bool player_page_ = false;
+    PendingAction pending_action_ = PendingAction::None;
+    std::size_t pending_index_ = 0;
+    Tab pending_tab_ = Tab::Songs;
     std::string selected_title_;
     std::string shown_status_;
     std::string shown_elapsed_;
-    PendingAction pending_action_ = PendingAction::None;
-    std::size_t pending_index_ = 0;
 };
