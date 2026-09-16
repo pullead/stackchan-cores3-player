@@ -2,6 +2,8 @@
 
 #include "local_music_presenter.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,7 +26,15 @@ public:
     void onClose() override;
 
 private:
+    // A click handler must not destroy the widget it was invoked from: the
+    // closure dies with the button and the rest of the handler would run on
+    // freed memory.  Clicks therefore only record an intent, which onRunning()
+    // carries out once LVGL has finished dispatching the event.
+    enum class PendingAction : uint8_t { None, SelectTrack, BackToList };
+
     void create_view();
+    void apply_pending_action();
+    void select_track(std::size_t index);
     void render(const local_music::BrowseView& view);
     void render_playback(const std::string& title, const std::string& status);
     void show_list();
@@ -55,4 +65,6 @@ private:
     bool playback_view_ = false;
     std::string selected_title_;
     std::string shown_status_;
+    PendingAction pending_action_ = PendingAction::None;
+    std::size_t pending_index_ = 0;
 };

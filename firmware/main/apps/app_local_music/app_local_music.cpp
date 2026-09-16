@@ -81,6 +81,9 @@ void AppLocalMusic::onOpen() {
 }
 
 void AppLocalMusic::onRunning() {
+    // Runs outside LVGL event dispatch, so rebuilding the page is safe here.
+    apply_pending_action();
+
     // Decoding happens on the media pump task; this only mirrors its state.
     if (!playback_ || !playback_view_ || !detail_) {
         return;
@@ -120,6 +123,7 @@ void AppLocalMusic::onClose() {
     title_.reset();
     panel_.reset();
     playback_view_ = false;
+    pending_action_ = PendingAction::None;
     selected_title_.clear();
     shown_status_.clear();
     pump_task_.reset();
@@ -205,38 +209,69 @@ void AppLocalMusic::render(const local_music::BrowseView& view) {
         row->setRadius(4);
         row->setWidth(276);
         row->setHeight(22);
+        // Record the intent only; acting here would destroy this very button
+        // and leave the rest of the handler running on freed memory.
         row->onClick().connect([this, index]() {
-            const auto selected = local_music::select_track(tracks_, index);
-            if (!selected.accepted || index >= tracks_.size()) {
-                return;
-            }
-
-            selected_title_ = tracks_[index].title;
-            // Always enter the player page so a selected track has a clear
-            // destination.  The page reports backend availability honestly;
-            // it must never show a fake Playing state.
-            render_playback(selected_title_, "PREPARING / MUTED");
-
-            // The SD stream is opened read-only.  Do not claim playback when
-            // the optional compressed-audio backend is absent.
-            auto stream = sd_card_.open_track(tracks_[index]);
-            auto* backend = media::create_hifi_decoder_backend();
-            if (!stream || backend == nullptr || !playback_) {
-                render_playback(selected_title_, "DECODER UNAVAILABLE / MUTED");
-                return;
-            }
-
-            auto decoder = std::make_unique<media::HifiDecoderAdapter>(*backend);
-            playback_->select(selected_title_, std::move(stream), std::move(decoder));
-            if (!playback_->start()) {
-                render_playback(selected_title_, playback_status());
-                return;
-            }
-
-            render_playback(selected_title_, playback_status());
+            pending_action_ = PendingAction::SelectTrack;
+            pending_index_ = index;
         });
         track_rows_.push_back(std::move(row));
     }
+}
+
+void AppLocalMusic::apply_pending_action() {
+    const PendingAction action = pending_action_;
+    if (action == PendingAction::None) {
+        return;
+    }
+    pending_action_ = PendingAction::None;
+
+    if (action == PendingAction::BackToList) {
+        // Stop outside the LVGL lock: the pump task may be waiting for that
+        // same lock to borrow the SD bus, and holding it here would deadlock.
+        if (playback_) {
+            playback_->stop();
+        }
+        LvglLockGuard lock;
+        show_list();
+        return;
+    }
+    select_track(pending_index_);
+}
+
+void AppLocalMusic::select_track(std::size_t index) {
+    const auto selected = local_music::select_track(tracks_, index);
+    if (!selected.accepted || index >= tracks_.size()) {
+        return;
+    }
+
+    selected_title_ = tracks_[index].title;
+    {
+        // Always enter the player page so a selected track has a clear
+        // destination.  The page reports backend availability honestly; it
+        // must never show a fake Playing state.
+        LvglLockGuard lock;
+        render_playback(selected_title_, "PREPARING / MUTED");
+    }
+
+    // Opening the stream borrows the display bus, so it must not be done while
+    // an application-level LVGL lock is held.
+    auto stream = sd_card_.open_track(tracks_[index]);
+    auto* backend = media::create_hifi_decoder_backend();
+    if (!stream || backend == nullptr || !playback_) {
+        LvglLockGuard lock;
+        detail_->setText("DECODER UNAVAILABLE / MUTED");
+        return;
+    }
+
+    auto decoder = std::make_unique<media::HifiDecoderAdapter>(*backend);
+    playback_->select(selected_title_, std::move(stream), std::move(decoder));
+    playback_->start();
+
+    const std::string status = playback_status();
+    shown_status_ = status;
+    LvglLockGuard lock;
+    detail_->setText(status);
 }
 
 void AppLocalMusic::render_playback(const std::string& title, const std::string& status) {
@@ -280,16 +315,14 @@ void AppLocalMusic::render_playback(const std::string& title, const std::string&
     back->label().setText("BACK TO LIST");
     back->label().setTextFont(&font_puhui_14_1);
     back->label().setTextColor(lv_color_hex(kPrimary));
-    back->onClick().connect([this]() { show_list(); });
+    back->onClick().connect([this]() { pending_action_ = PendingAction::BackToList; });
 
     back_ = std::move(back);
 }
 
 void AppLocalMusic::show_list() {
+    // Caller holds the LVGL lock and has already stopped playback.
     if (!panel_) return;
-    if (playback_) {
-        playback_->stop();
-    }
     back_.reset();
     playback_note_.reset();
     playback_progress_.reset();
