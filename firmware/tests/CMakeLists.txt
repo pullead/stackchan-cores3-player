@@ -239,3 +239,22 @@ add_executable(playback_pump_policy_test
 target_include_directories(playback_pump_policy_test PRIVATE ../main)
 target_compile_features(playback_pump_policy_test PRIVATE cxx_std_17)
 add_test(NAME playback_pump_policy_test COMMAND $<TARGET_FILE:playback_pump_policy_test>)
+
+add_executable(byte_ring_test
+    byte_ring_test.cpp
+    ../main/media/storage/byte_ring.cpp
+    host_stubs/no_abort_dialog.cpp
+)
+target_include_directories(byte_ring_test PRIVATE ../main)
+target_compile_features(byte_ring_test PRIVATE cxx_std_17)
+add_test(NAME byte_ring_test COMMAND $<TARGET_FILE:byte_ring_test>)
+
+add_executable(prefetching_stream_test
+    prefetching_stream_test.cpp
+    ../main/media/storage/prefetching_stream.cpp
+    ../main/media/storage/byte_ring.cpp
+    host_stubs/no_abort_dialog.cpp
+)
+target_include_directories(prefetching_stream_test PRIVATE ../main)
+target_compile_features(prefetching_stream_test PRIVATE cxx_std_17)
+add_test(NAME prefetching_stream_test COMMAND $<TARGET_FILE:prefetching_stream_test>)

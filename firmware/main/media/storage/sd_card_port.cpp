@@ -1,6 +1,7 @@
 #include "media/storage/sd_card_port.h"
 
 #include "hal/board/spi3_display_handoff.h"
+#include "media/storage/prefetching_stream.h"
 #include "media/storage/sd_audio_stream.h"
 
 namespace media {
@@ -101,7 +102,13 @@ std::unique_ptr<AudioStream> SdCardPort::open_track(const SdTrack& track) {
     };
     operations.close = [](void*, void* handle, std::string& error) { if (fclose(static_cast<FILE*>(handle)) != 0) { error = "SD audio close failed"; return false; } return true; };
     operations.unmount = unmount_hardware;
-    return std::make_unique<SdAudioStream>(*handoff_, operations, track.path);
+    auto card_stream = std::make_unique<SdAudioStream>(*handoff_, operations, track.path);
+    if (!card_stream->is_open()) {
+        return card_stream;  // Let the caller report the open failure.
+    }
+    // Read ahead on a separate task: decoding must not stop while the display
+    // bus is borrowed, which is what held playback below the sample rate.
+    return std::make_unique<PrefetchingStream>(std::move(card_stream));
 #else
     (void)track;
     return nullptr;

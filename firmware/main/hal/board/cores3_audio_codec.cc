@@ -6,6 +6,7 @@
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_std.h>
+#include <soc/i2s_reg.h>
 #include <driver/i2s_tdm.h>
 
 #define TAG "CoreS3AudioCodec"
@@ -292,6 +293,12 @@ bool CoreS3AudioCodec::ReconfigureOutput(int sample_rate, int channels) {
     output_sample_rate_ = sample_rate;
     output_channels_ = channels;
     ESP_LOGI(TAG, "Output retimed to %d Hz, %d ch", sample_rate, channels);
+    // The measured delivery rate suggested the clock lands short of the
+    // requested rate.  Print the divider the driver actually programmed so the
+    // real MCLK can be computed instead of inferred.
+    ESP_LOGI(TAG, "I2S TX clock regs: clkm_conf=0x%08x div_conf=0x%08x",
+             (unsigned)REG_READ(I2S_TX_CLKM_CONF_REG(0)),
+             (unsigned)REG_READ(I2S_TX_CLKM_DIV_CONF_REG(0)));
 
     if (was_enabled) {
         EnableOutput(true);

@@ -35,9 +35,11 @@ struct SdAudioFileOperations {
 // stays mounted throughout; only the pin routing and the LVGL lock are cycled.
 class SdAudioStream final : public AudioStream {
 public:
-    // ~4 seconds of 128 kbps audio per borrow, so the display is blocked only
-    // a few times per track rather than continuously.
-    static constexpr std::size_t kPrefetchBytes = 64 * 1024;
+    // Sized against the I2S DMA depth, not against comfort: the ring holds
+    // 6 x 240 frames, i.e. ~33 ms at 44.1 kHz, and the decoder produces nothing
+    // while the bus is borrowed.  Reading 64 KB took longer than that and
+    // starved the DMA; 16 KB keeps each pause near 10 ms.
+    static constexpr std::size_t kPrefetchBytes = 16 * 1024;
 
     SdAudioStream(board::Spi3DisplayHandoff& handoff,
                   SdAudioFileOperations operations,
