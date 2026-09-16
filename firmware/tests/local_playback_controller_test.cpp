@@ -164,7 +164,7 @@ std::vector<uint8_t> compatible_wav(size_t frames) {
 bool test_start_and_pump_follow_bounded_playback_route() {
     FakeSink sink;
     media::LocalPlaybackController controller(sink);
-    controller.select("demo.wav", compatible_wav(1500));
+    controller.select("demo.wav", compatible_wav(3000));
 
     if (!check(controller.start(), "compatible WAV starts") ||
         !check(controller.snapshot().state == media::PlaybackState::Playing,
@@ -179,19 +179,19 @@ bool test_start_and_pump_follow_bounded_playback_route() {
     controller.pump();
     if (!check(controller.snapshot().state == media::PlaybackState::Playing,
                "non-final pump remains Playing") ||
-        !check(controller.snapshot().total_frames == 1500, "snapshot reports total frames") ||
-        !check(controller.snapshot().played_frames == 1024, "pump writes bounded chunk") ||
-        !check(sink.requested_frames == std::vector<size_t>{1024}, "first write is at most 1024")) {
+        !check(controller.snapshot().total_frames == 3000, "snapshot reports total frames") ||
+        !check(controller.snapshot().played_frames == 2048, "pump writes bounded chunk") ||
+        !check(sink.requested_frames == std::vector<size_t>{2048}, "first write is one full chunk")) {
         return false;
     }
 
     controller.pump();
     const auto snapshot = controller.snapshot();
     return check(snapshot.state == media::PlaybackState::Idle, "EOF returns to Idle") &&
-           check(snapshot.played_frames == 1500, "EOF retains played frame count") &&
+           check(snapshot.played_frames == 3000, "EOF retains played frame count") &&
            check(snapshot.title == "demo.wav", "snapshot retains selection title") &&
            check(snapshot.muted, "controller snapshot is always muted") &&
-           check(sink.requested_frames == std::vector<size_t>{1024, 476},
+           check(sink.requested_frames == std::vector<size_t>{2048, 952},
                  "final write is remaining frames") &&
            check(sink.events == std::vector<Event>{Event::Open, Event::Write, Event::Write,
                                                     Event::Flush, Event::Close},

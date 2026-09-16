@@ -4,6 +4,8 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 
+#include <string>
+
 #define TAG "MediaPump"
 #endif
 
@@ -22,6 +24,7 @@ void PlaybackPumpTask::run() noexcept {
     size_t measure_start_frames = 0;
     int64_t last_report_us = 0;
     bool measuring = false;
+    std::string reported_error;
 #endif
     while (true) {
         const LocalPlaybackSnapshot snapshot = controller_.snapshot();
@@ -30,6 +33,15 @@ void PlaybackPumpTask::run() noexcept {
         if (action == PumpAction::Exit) {
             break;
         }
+#ifdef ESP_PLATFORM
+        // The controller keeps its failure reason in the snapshot, which the UI
+        // shows but the log never did; without it a failed start is invisible.
+        if (snapshot.state == PlaybackState::Error && !snapshot.error.empty() &&
+            snapshot.error != reported_error) {
+            reported_error = snapshot.error;
+            ESP_LOGE(TAG, "Playback error: %s", snapshot.error.c_str());
+        }
+#endif
         if (action == PumpAction::Pump) {
 #ifdef ESP_PLATFORM
             const int64_t now_us = esp_timer_get_time();

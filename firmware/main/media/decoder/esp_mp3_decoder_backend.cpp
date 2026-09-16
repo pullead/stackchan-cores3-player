@@ -7,6 +7,12 @@
 #include <cstring>
 #include <new>
 
+#ifdef ESP_PLATFORM
+#include <esp_log.h>
+
+#define TAG "EspMp3Decoder"
+#endif
+
 namespace media {
 
 EspMp3DecoderBackend::~EspMp3DecoderBackend() { reset_state(); }
@@ -106,6 +112,10 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
             // The caller owns the fixed PcmBlock storage.  Treat a codec
             // request for a larger frame as an explicit contract failure,
             // rather than silently labelling it a malformed MP3.
+#ifdef ESP_PLATFORM
+            ESP_LOGE(TAG, "Output buffer too small: %u bytes offered for one frame",
+                     static_cast<unsigned>(output_bytes));
+#endif
             error_ = AudioDecodeStatus::InvalidArgument;
             return error_;
         }
@@ -127,9 +137,18 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
             }
             continue;
         }
+#ifdef ESP_PLATFORM
+        ESP_LOGE(TAG, "Decode failed: codec status %d, consumed %u, buffered %u",
+                 static_cast<int>(result), static_cast<unsigned>(consumed),
+                 static_cast<unsigned>(input_size_));
+#endif
         error_ = map_error(result);
         return error_;
     }
+#ifdef ESP_PLATFORM
+    ESP_LOGE(TAG, "Gave up after 4 attempts with %u bytes buffered",
+             static_cast<unsigned>(input_size_));
+#endif
     error_ = AudioDecodeStatus::Malformed;
     return error_;
 }

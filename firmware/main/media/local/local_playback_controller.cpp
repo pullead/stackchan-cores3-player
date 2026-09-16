@@ -1,6 +1,5 @@
 #include "media/local/local_playback_controller.h"
 
-#include <array>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -8,7 +7,7 @@
 namespace media {
 
 LocalPlaybackController::LocalPlaybackController(AudioSink& sink, MediaModeController* mode)
-    : sink_(sink), mode_(mode) {}
+    : sink_(sink), mode_(mode), decode_buffer_(kPlaybackChunkFrames * 2, 0) {}
 
 void LocalPlaybackController::select(std::string title, std::vector<uint8_t> wav_bytes) {
     std::lock_guard<std::recursive_mutex> guard(mutex_);
@@ -108,9 +107,9 @@ void LocalPlaybackController::pump() {
 
     if (pending_pcm_.empty()) {
         // Decoder contract: PcmBlock capacity is frames, while this backing
-        // array deliberately reserves up to two interleaved int16 samples per
+        // buffer deliberately reserves up to two interleaved int16 samples per
         // frame until the compressed header reveals mono versus stereo.
-        std::array<int16_t, kPlaybackChunkFrames * 2> frames{};
+        std::vector<int16_t>& frames = decode_buffer_;
         size_t frame_count = 0;
         if (decoder_) {
             const size_t capacity = kPlaybackChunkFrames;

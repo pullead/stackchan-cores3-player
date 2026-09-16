@@ -36,7 +36,10 @@ struct LocalPlaybackSnapshot {
 // already holding the lock.
 class LocalPlaybackController {
 public:
-    static constexpr size_t kPlaybackChunkFrames = 1024;
+    // An MP3 frame is 1152 samples per channel, so a 1024-frame buffer can
+    // never hold one and the decoder only ever reports "buffer too small".
+    // 2048 frames covers MP3 and AAC (1024) with room to spare.
+    static constexpr size_t kPlaybackChunkFrames = 2048;
 
     explicit LocalPlaybackController(AudioSink& sink, MediaModeController* mode = nullptr);
     LocalPlaybackController(const LocalPlaybackController&) = delete;
@@ -71,6 +74,9 @@ private:
     std::vector<uint8_t> selected_bytes_;
     size_t total_frames_ = 0;
     size_t played_frames_ = 0;
+    // Interleaved worst case is two samples per frame.  Heap, not stack: 8 KB
+    // of stereo PCM would not fit comfortably in the audio task's stack.
+    std::vector<int16_t> decode_buffer_;
     std::vector<int16_t> pending_pcm_;
     size_t pending_offset_ = 0;
     bool decoder_eof_ = false;
