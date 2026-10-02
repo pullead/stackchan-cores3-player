@@ -258,3 +258,12 @@ add_executable(prefetching_stream_test
 target_include_directories(prefetching_stream_test PRIVATE ../main)
 target_compile_features(prefetching_stream_test PRIVATE cxx_std_17)
 add_test(NAME prefetching_stream_test COMMAND $<TARGET_FILE:prefetching_stream_test>)
+
+add_executable(spectrum_analyzer_test
+    spectrum_analyzer_test.cpp
+    ../main/media/audio/spectrum_analyzer.cpp
+    host_stubs/no_abort_dialog.cpp
+)
+target_include_directories(spectrum_analyzer_test PRIVATE ../main)
+target_compile_features(spectrum_analyzer_test PRIVATE cxx_std_17)
+add_test(NAME spectrum_analyzer_test COMMAND $<TARGET_FILE:spectrum_analyzer_test>)

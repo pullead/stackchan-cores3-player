@@ -81,3 +81,8 @@ CONFIG_LV_BUILD_DEMOS=n
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
 CONFIG_FATFS_API_ENCODING_UTF_8=y
+
+# The status bar is 20px tall and uses the 10px face upstream does;
+# 12px carries the back chevron.
+CONFIG_LV_FONT_MONTSERRAT_10=y
+CONFIG_LV_FONT_MONTSERRAT_12=y

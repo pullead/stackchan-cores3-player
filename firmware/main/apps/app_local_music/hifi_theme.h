@@ -64,4 +64,64 @@ inline constexpr int32_t kListHeight = 136 + kExtraHeight;
 inline constexpr int32_t kScrollSliderX = 300;
 inline constexpr int32_t kScrollSliderWidth = 12;
 
+// --- Status bar ----------------------------------------------------------
+// 20px strip: back chevron, clock, WiFi, sample rate, a bordered DAC tag,
+// codec name, and volume packed from the right edge.
+inline constexpr int32_t kStatusBarHeight = 20;
+inline constexpr int32_t kStatusBackWidth = 26;
+inline constexpr int32_t kStatusTimeX = 28;
+inline constexpr int32_t kStatusWifiX = 68;
+inline constexpr int32_t kStatusRateX = 96;
+inline constexpr int32_t kStatusDacX = 158;
+inline constexpr int32_t kStatusDacWidth = 32;
+inline constexpr int32_t kStatusDacHeight = 14;
+inline constexpr int32_t kStatusCodecX = 196;
+inline lv_color_t status_border() { return lv_color_hex(0x2A2050); }
+
+// --- Now playing ---------------------------------------------------------
+// Re-laid out for 320x240 rather than stretched from 320x170.  Cover and track
+// text share the top band, the spectrum runs the full width below them, and the
+// control bar is pinned to the bottom edge.
+//
+// The spectrum keeps upstream's grid exactly -- 28 columns by 11 rows.  Going
+// full width is what buys the bigger cells (6x8 on an 8x10 pitch here against
+// 5x3 on an 8x4 pitch upstream); the count is never traded for size.
+inline constexpr int32_t kCoverX = 8;
+inline constexpr int32_t kCoverY = 24;
+inline constexpr int32_t kCoverSize = 72;
+
+inline constexpr int32_t kTextColumnX = 88;
+inline constexpr int32_t kTextColumnWidth = 224;
+inline constexpr int32_t kTitleY = 26;
+inline constexpr int32_t kLyricY = 50;
+// Elapsed and total share one row beside the cover, at either end of the text
+// column.
+inline constexpr int32_t kTimeRowY = 76;
+
+inline constexpr int32_t kSpectrumCols = 28;
+inline constexpr int32_t kSpectrumRows = 11;
+inline constexpr int32_t kSpectrumColPitch = 10;
+inline constexpr int32_t kSpectrumRowPitch = 7;
+inline constexpr int32_t kSpectrumCellWidth = 8;
+inline constexpr int32_t kSpectrumCellHeight = 5;
+inline constexpr int32_t kSpectrumWidth = kSpectrumCols * kSpectrumColPitch;
+inline constexpr int32_t kSpectrumHeight = kSpectrumRows * kSpectrumRowPitch - 1;
+inline constexpr int32_t kSpectrumX = (kScreenWidth - kSpectrumWidth) / 2;
+inline constexpr int32_t kSpectrumY = 98;
+
+// Seek slider spans the full content width under the spectrum.
+inline constexpr int32_t kProgressX = 8;
+inline constexpr int32_t kProgressWidth = kScreenWidth - 2 * kProgressX;
+inline constexpr int32_t kProgressY = 182;
+inline constexpr int32_t kProgressHeight = 12;
+
+// Control bar: seven 45px slots, pinned to the bottom edge.  The play button
+// sits in slot 2 and is deliberately NOT centred on the screen -- upstream
+// tried centring it and the change was rejected; the order is fixed.
+inline constexpr int32_t kControlBarHeight = 36;
+inline constexpr int32_t kControlBarY = kScreenHeight - kControlBarHeight;
+inline constexpr int32_t kControlSlots = 7;
+inline constexpr int32_t kControlSlotWidth = kScreenWidth / kControlSlots;
+inline constexpr int32_t kPlayRingSize = 32;
+
 }  // namespace hifi_theme

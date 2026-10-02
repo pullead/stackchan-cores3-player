@@ -2,6 +2,7 @@
 
 #include "local_music_presenter.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -9,6 +10,8 @@
 #include <vector>
 
 #include <media/audio/board_audio_codec_port.h>
+#include <media/audio/pcm_tap.h>
+#include <media/audio/spectrum_analyzer.h>
 #include <media/audio/board_audio_session_port.h>
 #include <media/audio/core_s3_speaker_sink.h>
 #include <media/local/local_playback_controller.h>
@@ -41,14 +44,38 @@ private:
     // closure dies with the button and the rest of the handler would run on
     // freed memory.  Clicks therefore only record an intent, which onRunning()
     // carries out once LVGL has finished dispatching the event.
-    enum class PendingAction : uint8_t { None, SelectTrack, BackToList, SwitchTab };
+    enum class PendingAction : uint8_t {
+        None,
+        SelectTrack,
+        BackToList,
+        SwitchTab,
+        PlayPause,
+        Prev,
+        Next,
+        CyclePlayMode,
+        ToggleFavourite,
+        ToggleCassette,
+    };
+
+    // Cycled by the play-mode button, in the upstream order: sequential stops
+    // at the end of the list, repeat-all wraps, repeat-one replays the same
+    // track, shuffle picks at random.
+    enum class PlayMode : uint8_t { Sequential, RepeatAll, RepeatOne, Shuffle };
 
     void build_list_page();
     void build_player_page();
+    void build_status_bar();
+    void build_control_bar();
+    void build_spectrum(lv_obj_t* card);
     void destroy_page();
     void apply_pending_action();
     void select_track(std::size_t index);
+    void start_track(std::size_t index);
+    void step_track(int direction);
     void refresh_player_page();
+    void refresh_spectrum();
+    void draw_spectrum_cell(int32_t column, int32_t row, bool lit);
+    void update_transport_icons();
     std::string playback_status() const;
     std::string playback_status(media::PlaybackState state) const;
 
@@ -56,6 +83,11 @@ private:
     static void on_row_clicked(lv_event_t* event);
     static void on_back_clicked(lv_event_t* event);
     static void on_scroll_slider(lv_event_t* event);
+    static void on_transport(lv_event_t* event);
+    // Left-edge swipe right goes back, the same gesture upstream uses as its
+    // universal back action.
+    static void on_gesture(lv_event_t* event);
+    static void on_press_start(lv_event_t* event);
 
     media::SdCardPort sd_card_;
     std::unique_ptr<media::BoardAudioCodecPort> codec_port_;
@@ -76,8 +108,33 @@ private:
     lv_obj_t* scroll_slider_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* player_title_ = nullptr;
+    lv_obj_t* player_lyric_ = nullptr;
     lv_obj_t* player_elapsed_ = nullptr;
+    lv_obj_t* player_total_ = nullptr;
     lv_obj_t* player_state_ = nullptr;
+    lv_obj_t* progress_ = nullptr;
+    lv_obj_t* spectrum_ = nullptr;
+    lv_color_t* spectrum_buffer_ = nullptr;
+    lv_obj_t* play_icon_ = nullptr;
+    lv_obj_t* mode_icon_ = nullptr;
+    lv_obj_t* favourite_icon_ = nullptr;
+    lv_obj_t* status_time_ = nullptr;
+    lv_obj_t* status_wifi_ = nullptr;
+    lv_obj_t* status_rate_ = nullptr;
+    lv_obj_t* status_dac_box_ = nullptr;
+    lv_obj_t* status_dac_ = nullptr;
+    lv_obj_t* status_codec_ = nullptr;
+    lv_obj_t* status_volume_ = nullptr;
+
+    // Spectrum data path: the audio task fills the tap, this page drains it.
+    media::PcmTap pcm_tap_;
+    media::SpectrumAnalyzer analyzer_;
+    std::array<int32_t, media::SpectrumAnalyzer::kColumns> drawn_rows_{};
+
+    std::size_t current_index_ = 0;
+    PlayMode play_mode_ = PlayMode::Sequential;
+    bool cassette_view_ = false;
+    int32_t press_start_x_ = 0;
 
     Tab tab_ = Tab::Songs;
     bool player_page_ = false;
