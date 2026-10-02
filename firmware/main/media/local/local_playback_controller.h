@@ -57,6 +57,10 @@ public:
                 std::unique_ptr<AudioDecoder> decoder);
     bool start();
     void pump();
+    // Pausing keeps the stream, decoder and sink open so resuming does not
+    // re-read the file; the pump simply stops consuming while paused.
+    bool pause();
+    bool resume();
     void stop();
     void stop_for_ai();
     void set_pcm_tap(PcmTap* tap) noexcept { pcm_tap_ = tap; }

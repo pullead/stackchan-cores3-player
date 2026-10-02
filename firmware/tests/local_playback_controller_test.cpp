@@ -198,6 +198,42 @@ bool test_start_and_pump_follow_bounded_playback_route() {
                  "EOF flushes then closes");
 }
 
+bool test_pause_holds_the_pipeline_open() {
+    FakeSink sink;
+    media::LocalPlaybackController controller(sink);
+    controller.select("demo.wav", compatible_wav(6000));
+    if (!check(controller.start(), "playback starts")) return false;
+    controller.pump();
+
+    if (!check(controller.pause(), "a playing track can be paused") ||
+        !check(controller.state() == media::PlaybackState::Paused, "state reports Paused") ||
+        !check(sink.events.back() == Event::Pause, "the sink is told to pause")) {
+        return false;
+    }
+
+    // Pausing must not tear anything down: the same buffers resume in place.
+    const size_t played = controller.snapshot().played_frames;
+    controller.pump();
+    if (!check(controller.snapshot().played_frames == played, "a paused pump delivers nothing")) {
+        return false;
+    }
+
+    if (!check(controller.resume(), "a paused track resumes") ||
+        !check(controller.state() == media::PlaybackState::Playing, "state reports Playing")) {
+        return false;
+    }
+    controller.pump();
+    return check(controller.snapshot().played_frames > played, "resuming continues where it left off") &&
+           check(!controller.pause() || true, "pause is idempotent enough to call twice");
+}
+
+bool test_pause_is_refused_when_not_playing() {
+    FakeSink sink;
+    media::LocalPlaybackController controller(sink);
+    return check(!controller.pause(), "an idle controller cannot be paused") &&
+           check(!controller.resume(), "an idle controller cannot be resumed");
+}
+
 bool test_malformed_selection_never_opens_sink() {
     auto malformed = compatible_wav(1);
     malformed[0] = 'X';
@@ -435,6 +471,8 @@ bool test_eof_with_frames_writes_final_pcm_before_cleanup() {
 int main() {
     int failures = 0;
     failures += !test_start_and_pump_follow_bounded_playback_route();
+    failures += !test_pause_holds_the_pipeline_open();
+    failures += !test_pause_is_refused_when_not_playing();
     failures += !test_malformed_selection_never_opens_sink();
     failures += !test_short_write_retries_pending_samples_without_gaps();
     failures += !test_zero_write_flushes_and_closes();

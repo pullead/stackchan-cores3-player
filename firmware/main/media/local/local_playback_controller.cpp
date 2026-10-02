@@ -200,6 +200,31 @@ void LocalPlaybackController::pump() {
     }
 }
 
+bool LocalPlaybackController::pause() {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
+    // Only a track that is actually producing PCM can be paused; the state
+    // machine does not allow Buffering -> Paused, and a half-started track
+    // has nothing to hold in place anyway.
+    if (state_machine_.state() != PlaybackState::Playing) {
+        return false;
+    }
+    if (!state_machine_.transition(PlaybackState::Paused)) {
+        return false;
+    }
+    sink_.pause();
+    publish_progress();
+    return true;
+}
+
+bool LocalPlaybackController::resume() {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
+    if (!state_machine_.transition(PlaybackState::Playing)) {
+        return false;
+    }
+    publish_progress();
+    return true;
+}
+
 void LocalPlaybackController::stop() {
     std::lock_guard<std::recursive_mutex> guard(mutex_);
     stop_pipeline();
