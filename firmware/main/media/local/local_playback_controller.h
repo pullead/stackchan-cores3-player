@@ -73,11 +73,15 @@ public:
         PlaybackState state = PlaybackState::Idle;
         size_t played_frames = 0;
         uint32_t sample_rate = 0;
+        // Interleave of the samples the PCM tap is being fed with.  A consumer
+        // that folds the tap without this cannot tell mono from stereo.
+        uint8_t channels = 1;
     };
     PlaybackTick tick() const noexcept {
         return {state_atomic_.load(std::memory_order_relaxed),
                 played_atomic_.load(std::memory_order_relaxed),
-                rate_atomic_.load(std::memory_order_relaxed)};
+                rate_atomic_.load(std::memory_order_relaxed),
+                channels_atomic_.load(std::memory_order_relaxed)};
     }
 
     PlaybackState state() const noexcept { return state_atomic_.load(std::memory_order_relaxed); }
@@ -93,6 +97,7 @@ private:
     std::atomic<PlaybackState> state_atomic_{PlaybackState::Idle};
     std::atomic<size_t> played_atomic_{0};
     std::atomic<uint32_t> rate_atomic_{0};
+    std::atomic<uint8_t> channels_atomic_{1};
     void fail(std::string error);
     void stop_pipeline();
     void close_sink();

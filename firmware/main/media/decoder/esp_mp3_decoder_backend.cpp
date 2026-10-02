@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <new>
 
 #ifdef ESP_PLATFORM
@@ -196,8 +197,11 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
     return error_;
 }
 
-HifiDecoderBackend* create_esp_mp3_decoder_backend() noexcept {
-    return new (std::nothrow) EspMp3DecoderBackend();
+std::unique_ptr<HifiDecoderBackend> create_esp_mp3_decoder_backend() noexcept {
+    // unique_ptr + nothrow: a failed allocation yields an empty pointer instead
+    // of terminating inside the audio path, and the backend (with its
+    // esp_mp3_dec_open handle) is released as soon as the track is dropped.
+    return std::unique_ptr<HifiDecoderBackend>(new (std::nothrow) EspMp3DecoderBackend());
 }
 
 }  // namespace media

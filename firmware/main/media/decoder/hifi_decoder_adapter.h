@@ -3,6 +3,7 @@
 #include "media/decoder/audio_decoder.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace media {
@@ -22,13 +23,21 @@ public:
     virtual AudioDecodeStatus last_error() const noexcept = 0;
 };
 
-// StackChan-facing adapter for the latest HiFi decoder flow.  The default
-// constructor is intentionally unavailable until the decoder dependency is
-// linked; use the injected backend in firmware/tests.
+// StackChan-facing adapter for the latest HiFi decoder flow.  The adapter must
+// outlive a borrowed backend; the owning constructor exists so the backend
+// factory result cannot be leaked by a track change.  Neither form touches
+// I2S, tasks or volume.
 class HifiDecoderAdapter final : public AudioDecoder {
 public:
+    // Borrowed backend: the caller owns it and must keep it alive for the
+    // adapter's lifetime (host tests inject a fixture this way).
     explicit HifiDecoderAdapter(HifiDecoderBackend& backend) noexcept
-        : backend_(backend) {}
+        : backend_(&backend) {}
+    // Owned backend: what the firmware factory hands over.  Without this the
+    // backend object and its codec handle were never freed, so every track
+    // change leaked them.
+    explicit HifiDecoderAdapter(std::unique_ptr<HifiDecoderBackend> backend) noexcept
+        : owned_(std::move(backend)), backend_(owned_.get()) {}
 
     AudioDecodeStatus open(AudioStream& stream) noexcept override;
     AudioDecodeStatus decode(PcmBlock& block) noexcept override;
@@ -38,14 +47,15 @@ public:
     AudioDecodeStatus last_error() const noexcept override;
 
 private:
-    HifiDecoderBackend& backend_;
+    std::unique_ptr<HifiDecoderBackend> owned_;
+    HifiDecoderBackend* backend_ = nullptr;
     AudioDecodeStatus error_ = AudioDecodeStatus::NotOpen;
     bool opened_ = false;
 };
 
-// Returns a backend only when the separately vendored ESP32-audioI2S
-// integration is enabled.  The default build returns nullptr rather than
+// Returns an owned backend, or an empty pointer when the compressed-audio
+// backend is not built in.  A build without it reports nothing rather than
 // pretending that compressed audio was decoded.
-HifiDecoderBackend* create_hifi_decoder_backend() noexcept;
+std::unique_ptr<HifiDecoderBackend> create_hifi_decoder_backend() noexcept;
 
 }  // namespace media

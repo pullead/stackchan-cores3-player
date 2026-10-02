@@ -5,19 +5,19 @@
 namespace media {
 
 AudioDecodeStatus HifiDecoderAdapter::open(AudioStream& stream) noexcept {
-    if (!stream.is_open()) {
+    if (backend_ == nullptr || !stream.is_open()) {
         opened_ = false;
         error_ = AudioDecodeStatus::InvalidArgument;
         return error_;
     }
-    const auto result = backend_.open(stream);
+    const auto result = backend_->open(stream);
     opened_ = result == AudioDecodeStatus::Ok;
     error_ = result;
     return result;
 }
 
 AudioDecodeStatus HifiDecoderAdapter::decode(PcmBlock& block) noexcept {
-    if (!opened_) {
+    if (!opened_ || backend_ == nullptr) {
         error_ = AudioDecodeStatus::NotOpen;
         return error_;
     }
@@ -25,7 +25,7 @@ AudioDecodeStatus HifiDecoderAdapter::decode(PcmBlock& block) noexcept {
         error_ = AudioDecodeStatus::InvalidArgument;
         return error_;
     }
-    const auto result = backend_.decode(block);
+    const auto result = backend_->decode(block);
     if (result == AudioDecodeStatus::Malformed || result == AudioDecodeStatus::IoError ||
         result == AudioDecodeStatus::Unsupported) {
         error_ = result;
@@ -33,14 +33,26 @@ AudioDecodeStatus HifiDecoderAdapter::decode(PcmBlock& block) noexcept {
     return result;
 }
 
-const PcmFormat& HifiDecoderAdapter::format() const noexcept { return backend_.format(); }
-const AudioMetadata& HifiDecoderAdapter::metadata() const noexcept { return backend_.metadata(); }
-bool HifiDecoderAdapter::eof() const noexcept { return opened_ && backend_.eof(); }
-AudioDecodeStatus HifiDecoderAdapter::last_error() const noexcept {
-    return error_ == AudioDecodeStatus::NotOpen ? backend_.last_error() : error_;
+const PcmFormat& HifiDecoderAdapter::format() const noexcept {
+    static const PcmFormat empty{};
+    return backend_ != nullptr ? backend_->format() : empty;
 }
 
-HifiDecoderBackend* create_hifi_decoder_backend() noexcept {
+const AudioMetadata& HifiDecoderAdapter::metadata() const noexcept {
+    static const AudioMetadata empty{};
+    return backend_ != nullptr ? backend_->metadata() : empty;
+}
+
+bool HifiDecoderAdapter::eof() const noexcept {
+    return opened_ && backend_ != nullptr && backend_->eof();
+}
+
+AudioDecodeStatus HifiDecoderAdapter::last_error() const noexcept {
+    if (backend_ == nullptr) return error_;
+    return error_ == AudioDecodeStatus::NotOpen ? backend_->last_error() : error_;
+}
+
+std::unique_ptr<HifiDecoderBackend> create_hifi_decoder_backend() noexcept {
     // The ESP-IDF decoder owns no I2S or volume state and is safe to use with
     // StackChan's existing AudioSink.  Arduino Audio remains deliberately
     // unsupported here because it would create a second audio owner.

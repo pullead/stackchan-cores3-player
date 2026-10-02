@@ -44,6 +44,6 @@ private:
     AudioDecodeStatus error_ = AudioDecodeStatus::NotOpen;
 };
 
-HifiDecoderBackend* create_esp_mp3_decoder_backend() noexcept;
+std::unique_ptr<HifiDecoderBackend> create_esp_mp3_decoder_backend() noexcept;
 
 }  // namespace media

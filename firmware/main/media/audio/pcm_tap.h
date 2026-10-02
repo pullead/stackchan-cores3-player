@@ -13,7 +13,12 @@ namespace media {
 // waits for a consumer; overflow is observable.
 class PcmTap {
 public:
-    static constexpr size_t kCapacity = 2048;
+    // One decoded chunk is a full kPlaybackChunkFrames window: up to 4096
+    // interleaved samples in stereo.  The producer only checks for space once
+    // per push, so a ring smaller than one chunk truncates every single chunk.
+    // Two chunks of room let a UI frame that arrives late drain what it missed
+    // instead of losing half of it.
+    static constexpr size_t kCapacity = 8192;
     size_t push(const int16_t* samples, size_t count) noexcept;
     size_t pop(int16_t* samples, size_t capacity) noexcept;
     size_t available() const noexcept { return head_.load(std::memory_order_acquire) - tail_.load(std::memory_order_acquire); }

@@ -32,6 +32,21 @@ std::array<ColumnRange, SpectrumAnalyzer::kColumns> build_ranges() noexcept {
 // does not strobe.
 constexpr uint8_t kDecayStep = 12;
 
+// Hann window, built once.  analyse_window() runs several hundred times a
+// second at 44.1 kHz stereo, and recomputing 128 cosines per window was pure
+// UI-thread cost for a table that never changes.
+const std::array<float, SpectrumAnalyzer::kFftSize>& hann_window() noexcept {
+    static const std::array<float, SpectrumAnalyzer::kFftSize> window = [] {
+        std::array<float, SpectrumAnalyzer::kFftSize> values{};
+        for (std::size_t i = 0; i < SpectrumAnalyzer::kFftSize; ++i) {
+            values[i] = 0.5f * (1.0f - std::cos(2.0f * 3.14159265358979f * i /
+                                                 (SpectrumAnalyzer::kFftSize - 1)));
+        }
+        return values;
+    }();
+    return window;
+}
+
 }  // namespace
 
 bool SpectrumAnalyzer::push(const int16_t* pcm, std::size_t samples, uint8_t channels) noexcept {
@@ -61,10 +76,9 @@ void SpectrumAnalyzer::analyse_window() noexcept {
     // at zero.  A Hann window keeps a steady tone from smearing across bins.
     std::array<float, kFftSize> real{};
     std::array<float, kFftSize> imag{};
+    const auto& hann = hann_window();
     for (std::size_t i = 0; i < kFftSize; ++i) {
-        const float hann =
-            0.5f * (1.0f - std::cos(2.0f * 3.14159265358979f * i / (kFftSize - 1)));
-        real[i] = window_[i] * hann;
+        real[i] = window_[i] * hann[i];
     }
 
     // Bit-reversal permutation.

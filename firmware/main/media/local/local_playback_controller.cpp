@@ -245,6 +245,10 @@ void LocalPlaybackController::publish_progress() noexcept {
     played_atomic_.store(played_frames_, std::memory_order_relaxed);
     const PcmFormat& format = decoder_ ? decoder_->format() : reader_.format();
     rate_atomic_.store(format.sample_rate, std::memory_order_relaxed);
+    // The tap carries interleaved samples, so a consumer that does not know the
+    // channel count cannot fold them correctly.  Until the sink is open the
+    // best available answer is mono, which is what the tap is fed with then.
+    channels_atomic_.store(sink_channels_ != 0 ? sink_channels_ : 1, std::memory_order_relaxed);
 }
 
 LocalPlaybackSnapshot LocalPlaybackController::snapshot() const {

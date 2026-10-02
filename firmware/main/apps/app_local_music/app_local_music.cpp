@@ -824,14 +824,17 @@ void AppLocalMusic::start_track(std::size_t index) {
     // may run while an application-level LVGL lock is held.
     playback_->stop();
     auto stream = sd_card_.open_track(tracks_[index]);
-    auto* backend = media::create_hifi_decoder_backend();
-    if (!stream || backend == nullptr) {
+    // The factory returns an owned pointer: the decoder adapter keeps it alive
+    // for the track and frees it (with its codec handle) when the track ends
+    // or the next one is selected.
+    auto backend = media::create_hifi_decoder_backend();
+    if (!stream || !backend) {
         LvglLockGuard lock;
         if (player_lyric_ != nullptr) lv_label_set_text(player_lyric_, "解码器不可用");
         return;
     }
 
-    auto decoder = std::make_unique<media::HifiDecoderAdapter>(*backend);
+    auto decoder = std::make_unique<media::HifiDecoderAdapter>(std::move(backend));
     playback_->select(selected_title_, std::move(stream), std::move(decoder));
     playback_->set_pcm_tap(&pcm_tap_);
     playback_->start();
@@ -845,13 +848,19 @@ void AppLocalMusic::refresh_spectrum() {
 
     // Drain whatever the audio task published since the last frame.  The FFT
     // runs here, on the UI side, never in the audio writer.
+    //
+    // The tap carries interleaved samples, so the folding has to use the real
+    // channel count of the stream: hard-coding stereo shifted the frequency
+    // axis of every mono track.
+    const uint8_t channels = playback_ != nullptr && playback_->tick().channels > 0
+                                 ? playback_->tick().channels
+                                 : 1;
     int16_t samples[256];
     bool fed = false;
     while (true) {
         const std::size_t count = pcm_tap_.pop(samples, sizeof(samples) / sizeof(samples[0]));
         if (count == 0) break;
-        // The tap carries interleaved samples; the analyser folds them down.
-        analyzer_.push(samples, count, 2);
+        analyzer_.push(samples, count, channels);
         fed = true;
     }
     if (!fed) {

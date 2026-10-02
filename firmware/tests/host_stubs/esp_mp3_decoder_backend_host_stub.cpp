@@ -9,6 +9,6 @@
 
 namespace media {
 
-HifiDecoderBackend* create_esp_mp3_decoder_backend() noexcept { return nullptr; }
+std::unique_ptr<HifiDecoderBackend> create_esp_mp3_decoder_backend() noexcept { return nullptr; }
 
 }  // namespace media
