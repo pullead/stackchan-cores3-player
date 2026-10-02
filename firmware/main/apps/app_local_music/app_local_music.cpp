@@ -179,6 +179,12 @@ void AppLocalMusic::destroy_page() {
     }
     list_ = nullptr;
     scroll_slider_ = nullptr;
+    // The pool rows live in the tree that was just deleted: leaving the
+    // pointers behind would let the next rebind write through a freed object.
+    row_pool_.fill(nullptr);
+    row_title_.fill(nullptr);
+    row_track_.fill(0);
+    first_row_ = -1;
     status_label_ = nullptr;
     player_title_ = nullptr;
     player_lyric_ = nullptr;
@@ -274,21 +280,29 @@ void AppLocalMusic::build_list_page() {
         return;
     }
 
-    int32_t row_y = 0;
-    for (std::size_t i = 0; i < tracks_.size(); ++i) {
+    // A spacer carries the full content height: the pool rows alone would give
+    // the container almost nothing to scroll over.
+    const int32_t content_height =
+        static_cast<int32_t>(tracks_.size()) * hifi_theme::kRowPitch;
+    lv_obj_t* spacer = lv_obj_create(list_);
+    lv_obj_set_pos(spacer, 0, 0);
+    lv_obj_set_size(spacer, 1, content_height);
+    lv_obj_set_style_bg_opa(spacer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(spacer, 0, 0);
+
+    for (int32_t slot = 0; slot < kRowPool; ++slot) {
         lv_obj_t* row = lv_button_create(list_);
-        lv_obj_set_pos(row, 0, row_y);
         lv_obj_set_size(row, hifi_theme::kRowWidth, hifi_theme::kRowHeight);
         style_flat(row, hifi_theme::panel(), hifi_theme::kRowRadius);
         lv_obj_set_user_data(row, this);
-        lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED,
-                            reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+        // The callback carries no index: the row is a pool slot, and what it
+        // shows changes as the list scrolls.
+        lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED, nullptr);
 
         // Single line: title on the left, artist on the right and dimmer.  Not
         // joined into "title · artist" -- in CJK that separator smears into the
         // glyphs, and two labels read more clearly for the same glyph count.
-        const char* title = tracks_[i].title.empty() ? "未知曲目" : tracks_[i].title.c_str();
-        lv_obj_t* title_label = make_text(row, title, hifi_theme::ink(), LV_ALIGN_LEFT_MID, 10, 0);
+        lv_obj_t* title_label = make_text(row, "", hifi_theme::ink(), LV_ALIGN_LEFT_MID, 10, 0);
         lv_label_set_long_mode(title_label, LV_LABEL_LONG_DOT);
         // LV_LABEL_LONG_DOT wraps by width and only ellipsises once the text
         // exceeds the label's HEIGHT, so the height has to be pinned to one
@@ -303,19 +317,26 @@ void AppLocalMusic::build_list_page() {
         lv_obj_set_size(detail, 76, lv_font_get_line_height(body_font()));
         lv_obj_set_style_text_align(detail, LV_TEXT_ALIGN_RIGHT, 0);
 
-        row_y += hifi_theme::kRowPitch;
+        row_pool_[slot] = row;
+        row_title_[slot] = title_label;
     }
 
-    if (row_y > hifi_theme::kListHeight) {
+    lv_obj_set_user_data(list_, this);
+    lv_obj_add_event_cb(list_, on_list_scrolled, LV_EVENT_SCROLL, nullptr);
+    first_row_ = -1;
+    rebind_rows();
+
+    if (content_height > hifi_theme::kListHeight) {
         scroll_slider_ = lv_slider_create(root_);
         lv_obj_set_pos(scroll_slider_, hifi_theme::kScrollSliderX, hifi_theme::kListY);
         lv_obj_set_size(scroll_slider_, hifi_theme::kScrollSliderWidth, hifi_theme::kListHeight);
-        lv_slider_set_range(scroll_slider_, 0, row_y - hifi_theme::kListHeight);
+        lv_slider_set_range(scroll_slider_, 0, content_height - hifi_theme::kListHeight);
         lv_obj_set_style_bg_color(scroll_slider_, hifi_theme::panel_deep(), LV_PART_MAIN);
         lv_obj_set_style_bg_color(scroll_slider_, hifi_theme::accent_deep(), LV_PART_INDICATOR);
         lv_obj_set_style_bg_color(scroll_slider_, hifi_theme::accent_bright(), LV_PART_KNOB);
         lv_obj_set_user_data(scroll_slider_, this);
         lv_obj_add_event_cb(scroll_slider_, on_scroll_slider, LV_EVENT_VALUE_CHANGED, nullptr);
+        sync_scroll_slider();
     }
 }
 
@@ -659,8 +680,16 @@ void AppLocalMusic::on_row_clicked(lv_event_t* event) {
     auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
     auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
     if (self == nullptr) return;
-    self->pending_index_ = reinterpret_cast<uintptr_t>(lv_event_get_user_data(event));
-    self->pending_action_ = PendingAction::SelectTrack;
+    // The row is a pool slot, so the track it stands for is whatever the last
+    // rebind put there, not something the event itself can carry.
+    for (int32_t slot = 0; slot < kRowPool; ++slot) {
+        if (self->row_pool_[slot] == target) {
+            if (self->row_track_[slot] >= self->tracks_.size()) return;
+            self->pending_index_ = self->row_track_[slot];
+            self->pending_action_ = PendingAction::SelectTrack;
+            return;
+        }
+    }
 }
 
 void AppLocalMusic::on_back_clicked(lv_event_t* event) {
@@ -683,11 +712,64 @@ void AppLocalMusic::on_scroll_slider(lv_event_t* event) {
     auto* slider = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
     auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(slider));
     if (self == nullptr || self->list_ == nullptr) return;
+    // sync_scroll_slider() writes the value back from the scroll offset, and
+    // that write raises VALUE_CHANGED again, so an echo has to be ignored or
+    // the two would keep driving each other.
+    if (self->syncing_slider_) return;
     // The slider grows upwards from the bottom while scroll_y grows downwards
     // from the top, so the value is inverted rather than mapped one to one.
     const int32_t range = lv_slider_get_max_value(slider);
     const int32_t value = lv_slider_get_value(slider);
     lv_obj_scroll_to_y(self->list_, range - value, LV_ANIM_OFF);
+}
+
+void AppLocalMusic::rebind_rows() {
+    if (list_ == nullptr || row_pool_[0] == nullptr || tracks_.empty()) {
+        return;
+    }
+    const int32_t scroll_y = lv_obj_get_scroll_y(list_);
+    int32_t first = scroll_y / hifi_theme::kRowPitch;
+    const int32_t last_first = static_cast<int32_t>(tracks_.size()) - kRowPool;
+    if (first > last_first) first = last_first;
+    if (first < 0) first = 0;
+    // Most scroll events do not move a whole row, and rebinding is the only
+    // work this handler does.
+    if (first == first_row_) return;
+    first_row_ = first;
+
+    for (int32_t slot = 0; slot < kRowPool; ++slot) {
+        lv_obj_t* row = row_pool_[slot];
+        const std::size_t index = static_cast<std::size_t>(first + slot);
+        if (index >= tracks_.size()) {
+            // Fewer tracks than pool slots: keep the surplus rows out of the way.
+            row_track_[slot] = 0;
+            lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        row_track_[slot] = index;
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(row, 0, static_cast<int32_t>(index) * hifi_theme::kRowPitch);
+        lv_label_set_text(row_title_[slot], tracks_[index].title.empty() ? "未知曲目"
+                                                                        : tracks_[index].title.c_str());
+    }
+}
+
+void AppLocalMusic::sync_scroll_slider() {
+    if (scroll_slider_ == nullptr || list_ == nullptr) return;
+    syncing_slider_ = true;
+    const int32_t range = lv_slider_get_max_value(scroll_slider_);
+    const int32_t scroll_y = lv_obj_get_scroll_y(list_);
+    const int32_t value = range - scroll_y;
+    lv_slider_set_value(scroll_slider_, value < 0 ? 0 : value, LV_ANIM_OFF);
+    syncing_slider_ = false;
+}
+
+void AppLocalMusic::on_list_scrolled(lv_event_t* event) {
+    auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
+    if (self == nullptr) return;
+    self->rebind_rows();
+    self->sync_scroll_slider();
 }
 
 void AppLocalMusic::on_transport(lv_event_t* event) {

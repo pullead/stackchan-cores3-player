@@ -74,6 +74,8 @@ private:
     void build_spectrum(lv_obj_t* card);
     void destroy_page();
     void release_resources();
+    void rebind_rows();
+    void sync_scroll_slider();
     void apply_pending_action();
     void select_track(std::size_t index);
     void start_track(std::size_t index);
@@ -95,6 +97,7 @@ private:
     // universal back action.
     static void on_gesture(lv_event_t* event);
     static void on_press_start(lv_event_t* event);
+    static void on_list_scrolled(lv_event_t* event);
 
     media::SdCardPort sd_card_;
     std::unique_ptr<media::BoardAudioCodecPort> codec_port_;
@@ -108,6 +111,17 @@ private:
     std::unique_ptr<media::PlaybackPumpTask> pump_task_;
 
     std::vector<media::SdTrack> tracks_;
+
+    // The list keeps a fixed pool of row widgets and rebinds them to whatever
+    // is on screen.  One LVGL object per track only worked while the scanner
+    // capped the library at 64; a real card has hundreds.
+    static constexpr int32_t kRowPool = 8;
+    std::array<lv_obj_t*, kRowPool> row_pool_{};
+    std::array<lv_obj_t*, kRowPool> row_title_{};
+    std::array<std::size_t, kRowPool> row_track_{};
+    int32_t first_row_ = -1;
+    // Guards the slider/scroll feedback loop while one is synced from the other.
+    bool syncing_slider_ = false;
 
     // One root per page; deleting it takes every child with it.
     lv_obj_t* root_ = nullptr;

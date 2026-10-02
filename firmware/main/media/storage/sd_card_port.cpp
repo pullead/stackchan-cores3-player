@@ -160,7 +160,7 @@ constexpr gpio_num_t kSdChipSelectPin = GPIO_NUM_4;
 // the shared-GPIO35 SD bus. Keep the same host and only initialize the bus in
 // the board layer; SD is attached after the display handoff is held.
 constexpr spi_host_device_t kSdHost = SPI3_HOST;
-constexpr size_t kMaxTracks = 64;
+constexpr size_t kMaxTracks = 1000;
 constexpr char kTag[] = "SdCardPort";
 // Use the probing clock for this isolated diagnostic. GPIO35 is shared with
 // LCD D/C, so a slow read separates signal-integrity/edge timing issues from
