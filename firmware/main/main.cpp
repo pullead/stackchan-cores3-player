@@ -11,6 +11,9 @@
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
 
+#include <esp_log.h>
+#include <esp_system.h>
+
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
 
@@ -23,6 +26,11 @@ extern "C" void app_main(void)
     // HAL init
     GetHAL().init();
     GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
+
+    // A reboot nobody asked for otherwise leaves no trace.  The reason tells a
+    // panic from a task watchdog from a brownout, which is the first thing
+    // needed to chase the one seen during playback.
+    ESP_LOGW("main", "reset reason: %d", static_cast<int>(esp_reset_reason()));
 
     // Setup ui hal
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });

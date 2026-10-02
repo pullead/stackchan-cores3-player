@@ -53,12 +53,16 @@ bool PrefetchingStream::fill_once() noexcept {
         return false;
     }
 
-    std::vector<uint8_t> chunk(chunk_bytes_);
+    // Sized once: a per-fill allocation put a 16 KB heap allocation on the
+    // audio path, and this function is noexcept, so failing it would abort.
+    if (chunk_.size() != chunk_bytes_) {
+        chunk_.resize(chunk_bytes_);
+    }
     std::size_t read = 0;
-    const AudioStreamStatus status = source_->read(chunk.data(), chunk_bytes_, read);
+    const AudioStreamStatus status = source_->read(chunk_.data(), chunk_bytes_, read);
     if (read > 0) {
         // Space was checked above, so the whole chunk fits.
-        ring_.write(chunk.data(), read);
+        ring_.write(chunk_.data(), read);
     }
     if (status == AudioStreamStatus::Eof) {
         source_eof_.store(true, std::memory_order_release);

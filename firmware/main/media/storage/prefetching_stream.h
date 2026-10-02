@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 
 #include "media/decoder/audio_stream.h"
 #include "media/storage/byte_ring.h"
@@ -67,6 +68,9 @@ private:
     std::unique_ptr<AudioStream> source_;
     ByteRing ring_;
     std::size_t chunk_bytes_;
+    // Refill staging, sized on first use.  Allocating it per fill put a 16 KB
+    // allocation on the audio path, inside a noexcept function.
+    std::vector<uint8_t> chunk_;
     uint64_t position_ = 0;
     std::size_t starve_count_ = 0;
     std::atomic<bool> source_eof_{false};
