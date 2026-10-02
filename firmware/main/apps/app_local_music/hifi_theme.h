@@ -124,4 +124,14 @@ inline constexpr int32_t kControlSlots = 7;
 inline constexpr int32_t kControlSlotWidth = kScreenWidth / kControlSlots;
 inline constexpr int32_t kPlayRingSize = 32;
 
+// App exit affordance.  The list page has no status bar, so "leave the app"
+// lives in the tab row; the left-edge swipe does the same thing, matching the
+// gesture the player page already uses for back.
+inline constexpr int32_t kExitWidth = 34;
+inline constexpr int32_t kExitHeight = 20;
+inline constexpr int32_t kExitRight = -6;
+inline constexpr int32_t kExitY = 4;
+// The track count moves left to make room for the exit button.
+inline constexpr int32_t kCountRight = -46;
+
 }  // namespace hifi_theme

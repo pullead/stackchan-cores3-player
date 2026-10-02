@@ -117,8 +117,21 @@ void AppLocalMusic::onRunning() {
     refresh_player_page();
 }
 
+AppLocalMusic::~AppLocalMusic() {
+    // uninstallAllApps() destroys the app without calling onClose(), so this is
+    // the only teardown the AI handoff ever gets -- and it is what stops the
+    // widget tree from outliving the object and dangling its user_data.
+    release_resources();
+}
+
 void AppLocalMusic::onClose() {
     mclog::tagInfo(getAppInfo().name, "on close");
+    release_resources();
+}
+
+void AppLocalMusic::release_resources() {
+    // Every step is idempotent and null-guarded, so running it twice (onClose
+    // followed by the destructor) is harmless.
     // Stop the pump before the controller so no decode is in flight while the
     // stream, sink and audio session are torn down.
     if (pump_task_) {
@@ -194,6 +207,11 @@ void AppLocalMusic::build_list_page() {
     lv_obj_set_size(root_, hifi_theme::kScreenWidth, hifi_theme::kScreenHeight);
     lv_obj_align(root_, LV_ALIGN_CENTER, 0, 0);
     style_flat(root_, hifi_theme::bg(), 0);
+    lv_obj_set_user_data(root_, this);
+    // Same edge gesture as the player page, but on the list it leaves the app:
+    // there is nothing above the list to go back to.
+    lv_obj_add_event_cb(root_, on_press_start, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(root_, on_gesture, LV_EVENT_GESTURE, nullptr);
 
     // No status bar on this page: upstream dropped it because the list is
     // scrolled constantly and the ~20px matters more than a persistent
@@ -214,7 +232,22 @@ void AppLocalMusic::build_list_page() {
 
     char header[32] = {};
     std::snprintf(header, sizeof(header), "共 %u 首", static_cast<unsigned>(tracks_.size()));
-    status_label_ = make_text(root_, header, hifi_theme::ink_dim(), LV_ALIGN_TOP_RIGHT, -10, 6);
+    status_label_ = make_text(root_, header, hifi_theme::ink_dim(), LV_ALIGN_TOP_RIGHT,
+                              hifi_theme::kCountRight, 6);
+
+    // The only visible way out of the app: without it the launcher can never be
+    // reached again, because nothing else puts this app to sleep.
+    lv_obj_t* exit_button = lv_button_create(root_);
+    lv_obj_set_size(exit_button, hifi_theme::kExitWidth, hifi_theme::kExitHeight);
+    lv_obj_align(exit_button, LV_ALIGN_TOP_RIGHT, hifi_theme::kExitRight, hifi_theme::kExitY);
+    style_flat(exit_button, hifi_theme::panel(), hifi_theme::kTabRadius);
+    lv_obj_set_user_data(exit_button, this);
+    lv_obj_add_event_cb(exit_button, on_exit_clicked, LV_EVENT_CLICKED, nullptr);
+    // The CJK body font carries no FontAwesome glyphs, so the icon has to name
+    // the symbol font explicitly, the same way the transport icons do.
+    lv_obj_t* exit_label =
+        make_text(exit_button, LV_SYMBOL_HOME, hifi_theme::ink_dim(), LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(exit_label, &lv_font_montserrat_16, 0);
 
     list_ = lv_obj_create(root_);
     lv_obj_set_pos(list_, hifi_theme::kListX, hifi_theme::kListY);
@@ -637,6 +670,15 @@ void AppLocalMusic::on_back_clicked(lv_event_t* event) {
     self->pending_action_ = PendingAction::BackToList;
 }
 
+void AppLocalMusic::on_exit_clicked(lv_event_t* event) {
+    auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
+    if (self == nullptr) return;
+    // Only record the intent here: close() tears the page down through
+    // onClose(), and LVGL must not lose objects while it is dispatching events.
+    self->pending_action_ = PendingAction::Exit;
+}
+
 void AppLocalMusic::on_scroll_slider(lv_event_t* event) {
     auto* slider = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
     auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(slider));
@@ -677,7 +719,9 @@ void AppLocalMusic::on_gesture(lv_event_t* event) {
     // Edge gesture only: a swipe that starts mid-screen belongs to whatever is
     // under the finger, not to navigation.
     if (self->press_start_x_ > kEdgeGestureWidth) return;
-    self->pending_action_ = PendingAction::BackToList;
+    // Back from the player page; out of the app from the list.
+    self->pending_action_ =
+        self->player_page_ ? PendingAction::BackToList : PendingAction::Exit;
 }
 
 void AppLocalMusic::apply_pending_action() {
@@ -750,6 +794,15 @@ void AppLocalMusic::apply_pending_action() {
             cassette_view_ = false;
             return;
         }
+        case PendingAction::Exit:
+            // Let Mooncake run onClose() on its next update, then hand the
+            // launcher back.  Closing the audio path first keeps the teardown
+            // that the destructor may also run from blocking on a live pump.
+            if (playback_) {
+                playback_->stop();
+            }
+            close();
+            return;
         case PendingAction::None:
             return;
     }

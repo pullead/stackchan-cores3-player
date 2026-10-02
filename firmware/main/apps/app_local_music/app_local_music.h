@@ -33,6 +33,10 @@ public:
     void onOpen() override;
     void onRunning() override;
     void onClose() override;
+    // Mooncake's uninstallAllApps() resets the ability manager, which destroys
+    // the app without ever calling onClose(); the AI handoff takes that path.
+    // The destructor therefore repeats the same teardown.
+    ~AppLocalMusic() override;
 
 private:
     // Browse dimensions, mirroring the upstream tab strip.  Songs is backed by
@@ -55,6 +59,7 @@ private:
         CyclePlayMode,
         ToggleFavourite,
         ToggleCassette,
+        Exit,
     };
 
     // Cycled by the play-mode button, in the upstream order: sequential stops
@@ -68,6 +73,7 @@ private:
     void build_control_bar();
     void build_spectrum(lv_obj_t* card);
     void destroy_page();
+    void release_resources();
     void apply_pending_action();
     void select_track(std::size_t index);
     void start_track(std::size_t index);
@@ -82,6 +88,7 @@ private:
     static void on_tab_clicked(lv_event_t* event);
     static void on_row_clicked(lv_event_t* event);
     static void on_back_clicked(lv_event_t* event);
+    static void on_exit_clicked(lv_event_t* event);
     static void on_scroll_slider(lv_event_t* event);
     static void on_transport(lv_event_t* event);
     // Left-edge swipe right goes back, the same gesture upstream uses as its
