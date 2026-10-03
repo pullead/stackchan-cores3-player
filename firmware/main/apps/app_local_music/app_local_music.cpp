@@ -9,6 +9,7 @@
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
 #include <media/decoder/hifi_decoder_adapter.h>
+#include <media/library/audio_format.h>
 #include <media/library/library_store.h>
 #include <media/library/mp3_info.h>
 #include <mooncake_log.h>
@@ -69,6 +70,12 @@ constexpr std::size_t kMetadataProbeBytes = 16384;
 // list responsive; the whole card is indexed over a few minutes of browsing, one
 // file at a time, and never while a track is playing.
 constexpr uint32_t kIndexIntervalMs = 250;
+
+// playable_ states: not looked at yet, decodable, and a container this firmware
+// has no demuxer for (Ogg, MP4).
+constexpr uint8_t kFormatUnknown = 0;
+constexpr uint8_t kFormatPlayable = 1;
+constexpr uint8_t kFormatUnsupported = 2;
 
 // Case-insensitive suffix test.  The MPEG reader below only speaks MP3, and WAV
 // PCM that happens to contain a 0xFFEx pattern would otherwise report a
@@ -147,6 +154,7 @@ void AppLocalMusic::onOpen() {
     // indexer has read that file.
     metadata_.assign(tracks_.size(), media::Mp3Tags{});
     indexed_.assign(tracks_.size(), 0);
+    playable_.assign(tracks_.size(), 0);
     index_cursor_ = 0;
     last_index_tick_ = lv_tick_get();
 
@@ -826,6 +834,11 @@ const char* AppLocalMusic::row_title_for(std::size_t index) const {
 }
 
 const char* AppLocalMusic::row_artist_for(std::size_t index) const {
+    if (index < playable_.size() && playable_[index] == kFormatUnsupported) {
+        // Said here rather than after a tap: the file is on the card, and the
+        // list is where the user finds out it cannot be played.
+        return "格式不支持";
+    }
     if (index < metadata_.size() && indexed_[index] != 0 && !metadata_[index].artist.empty()) {
         return metadata_[index].artist.c_str();
     }
@@ -858,6 +871,13 @@ void AppLocalMusic::index_one_track_when_idle() {
     std::vector<uint8_t> head;
     std::size_t tag_bytes = 0;
     if (sd_card_.read_head(tracks_[index], head, kMetadataProbeBytes)) {
+        // Same bytes decide both what the row is called and whether it can play,
+        // so the list never offers a track this firmware cannot decode.
+        std::size_t data_offset = 0;
+        playable_[index] = media::sniff_audio_format(head.data(), head.size(), data_offset) ==
+                                   media::AudioFormat::Unknown
+                               ? kFormatUnsupported
+                               : kFormatPlayable;
         media::Mp3Tags tags;
         if (media::parse_id3v2_tags(head.data(), head.size(), tags, tag_bytes)) {
             metadata_[index] = std::move(tags);
@@ -1168,6 +1188,11 @@ bool AppLocalMusic::step_track(int direction) {
 void AppLocalMusic::select_track(std::size_t index) {
     const auto selected = local_music::select_track(tracks_, index);
     if (!selected.accepted || index >= tracks_.size()) {
+        return;
+    }
+    // A track whose format is known unsupported stays on the list: the row
+    // already says so, and opening a player page for it would only mislead.
+    if (index < playable_.size() && playable_[index] == kFormatUnsupported) {
         return;
     }
 

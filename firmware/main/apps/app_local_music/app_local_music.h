@@ -135,6 +135,9 @@ private:
     // by index, not by path.
     std::vector<media::Mp3Tags> metadata_;
     std::vector<uint8_t> indexed_;
+    // 0 unknown, 1 decodable, 2 a container this firmware cannot demux.  Filled
+    // by the indexer from the same head bytes it already reads for metadata.
+    std::vector<uint8_t> playable_;
     std::size_t index_cursor_ = 0;
     uint32_t last_index_tick_ = 0;
 
