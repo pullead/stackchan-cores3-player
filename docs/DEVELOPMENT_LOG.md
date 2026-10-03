@@ -329,3 +329,44 @@ CoreS3 的 `AUDIO_INPUT_SAMPLE_RATE` 与 `AUDIO_OUTPUT_SAMPLE_RATE` 都固定为
 - 总时长需解析 MP3 时长，当前显示 `--:--`。
 - ID3 元数据、歌词解析、曲库索引与「歌手/专辑/今日/收藏」四个浏览维度。
 - 字体：上游使用 13px Noto Sans SC 子集，为 LVGL 8 字体二进制，无法加载；当前使用固件自带的普黑 14px。状态栏已启用 Montserrat 10/12 以匹配上游 20px 状态栏的字号。
+
+## 2026-10-03：媒体基础修复与能力补全（12 个提交）
+
+起点是 `codex/media-foundation` 的 `536563f`。先把工作树里从未提交的改动落盘，再逐项修复与补全。
+
+### 先落盘
+
+`C:\sc` 里有 10 个改动文件 + 3 个未跟踪文件（播放页与频谱分析仪）从未提交，只看 `git status` 会误判进度。按关注点拆成 4 个提交：控制器 `pause()/resume()`、播放页 + 频谱、开发日志、IDF 版本 pin。
+
+推送时发现本地是 **shallow clone**（浅边界为 m5stack 的 `1b57655`，仅 105 个提交），远端因此拒收对象包；`git fetch --unshallow origin` 补到 167 个提交后才推送成功。
+
+### 修复
+
+- **解码器每首歌泄漏**：`create_hifi_decoder_backend()` 返回裸指针、适配器只持引用，换歌即泄漏后端对象与 `esp_mp3_dec_open` 句柄。改为 `std::unique_ptr` 由适配器持有。
+- **频谱每块丢一半**：`PcmTap` 容量 2048，而一块解码输出最多 2048 帧 × 2 声道 = 4096 个采样，生产者每次 push 只检查一次空间，故即使消费者空闲也稳定丢 50%。容量改 8192；UI 改用控制器发布的真实声道数折叠（此前硬编码立体声，单声道频率轴是错的）；Hann 窗改为一次构建（此前每窗重算 128 次 `cos`）。
+- **退出入口与 widget 生命周期**：应用原本无法退出（只能断电重启）；且 `uninstallAllApps()` 是 `_app_ability_manager.reset()`，只跑析构、**不跑 `onClose()`/`onDestroy()`**，切 AI 时页面树会比 app 对象活得久、`user_data` 悬空。新增列表页 home 按钮与左边缘右滑退出，拆出 `release_resources()` 由 `onClose()` 与析构共同调用。
+- **列表虚拟化 + 扫描上限 64 → 1000**：原来每首曲目建一个 LVGL 对象，上限 64 是同一问题的另一面。改为 8 行对象池按滚动位置重绑，spacer 撑出完整内容高度；顺带修好滑块与列表不同步。
+- **预读分配**：`PrefetchingStream::fill_once()` 每次填充 new 16 KB（且函数为 `noexcept`，分配失败即 abort），改为一次分配复用。
+- **复位原因**：`main()` 启动记录 `esp_reset_reason()`。
+
+### 新增能力
+
+- **ID3v2 标签 + MP3 时长**（`media/library/mp3_info`）：TIT2/TPE1/TALB，UTF-8 / Latin-1 加宽 / UTF-16 带或不带 BOM；有 Xing/Info 时用其帧数取时长，否则按码率估算。`start_track()` 读 16 KB 后 `seek(0)` 归还，解码器仍从字节 0 开始。
+- **收藏**（`media/library/library_store`）：FNV-1a 32 路径身份（ASCII 大小写先折叠），写 **NVS 而非 SD 卡**（卡只读且共享）；写入失败即回滚，星标绝不显示"重启后会消失"的状态。`☆`/`★` 两个字形已确认都在固件 CJK 字体中。
+- **★ 筛选 + 视图子集导航**：列表由"可见子集"驱动，上一首/下一首/随机都跟随当前视图。
+- **曲末自动下一首**：控制器新增 `finished()`，只在 `pump()` 发现数据源耗尽时置位，由 `stop()`/`stop_for_ai()`/`start()`/失败清除——这是"歌放完了"与"用户按停"的唯一区分点；策略抽为纯函数 `action_after_finish()`。
+- **渐进式元数据索引**：存储层新增 `read_head`（复用 `SdAudioStream`，但无预读环、无任务），索引器只在**列表页且无播放**时每 250 ms 读一个文件——总线借用全局不可重入，播放中索引会打断播放。
+- **seek**：进度条可拖动（松手才 seek），控制器按字节比例定位后要求解码器 resync。
+
+### 本轮踩到的坑（值得记住）
+
+- **`skip_id3v2()` 会 `seek(0)`**：开头不是 ID3 标签时它倒回文件开头，因此"seek 后重新 `open()` 解码器"会**悄悄撤销每一次 seek**。修法是把打开编解码器拆成不碰流位置的 `open_codec()`。
+- **LVGL cmap 存的是相对偏移**：`unicode_list` 里是 `码点 - range_start`，直接 grep 码点会得出"图标全部缺失"的错误结论（本轮曾据此差点做无用的字体修复，随后更正）。
+- **主机测试此前从未在本机执行过**：编译器一直都在（另一项目的便携 MSVC + 系统 Windows SDK + ESP-IDF 自带的 CMake/Ninja），只是不在 `PATH` 上。跑起来后 **25/25 通过**，并立刻抓出一个真实缺陷：seek 测试里多余的 `pump()` 会让假解码器报告结束、状态回到 Idle，seek 被（正确地）拒绝。命令见 `docs/HOST_TESTS.md`。
+- **分区表里其实有 coredump 分区**（64 KB）。此前记录说"没有"是错的；本轮已开启 `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH`。
+
+### 尚未完成
+
+- **全部改动未上机**。主机测试覆盖纯逻辑，但 I2S/DMA 时钟、SPI3 总线交接、LVGL 渲染与触摸、NVS 读写、索引期借总线的卡顿（`kIndexIntervalMs`）、VBR 文件 seek 的准确度都只能在设备上验。
+- **索引不持久化**：`nvs` 分区仅 16 KB 且与 Wi-Fi/设置共用，装不下全库索引；是扩大 nvs 分区还是只持久化最近播放的少量元数据，需要先定预算。
+- 磁带视图、歌词、歌手/专辑/今日三个维度、电台、格式扩展（AAC/FLAC/OPUS 可走已锁定的 `esp_audio_codec`）均未开始。
