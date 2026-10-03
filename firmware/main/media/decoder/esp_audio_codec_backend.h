@@ -1,6 +1,7 @@
-﻿#pragma once
+#pragma once
 
 #include "media/decoder/hifi_decoder_adapter.h"
+#include "media/library/audio_format.h"
 
 #include <array>
 #include <cstddef>
@@ -31,6 +32,9 @@ private:
     AudioDecodeStatus map_error(int error) const noexcept;
     void* decoder_ = nullptr;
     AudioStream* stream_ = nullptr;
+    // Decided once in open() from the file's first bytes and kept for the life
+    // of the track, so reset() can re-open the same decoder after a seek.
+    AudioFormat input_format_ = AudioFormat::Unknown;
     // Junk before the first frame (leftover tag data, garbage) is tolerated up
     // to this much before the file is called broken.
     static constexpr std::size_t kMaxSearchBytes = 512 * 1024;

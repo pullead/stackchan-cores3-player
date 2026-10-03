@@ -1,5 +1,7 @@
-﻿#include "media/decoder/esp_audio_codec_backend.h"
+#include "media/decoder/esp_audio_codec_backend.h"
 
+#include "decoder/impl/esp_aac_dec.h"
+#include "decoder/impl/esp_flac_dec.h"
 #include "decoder/impl/esp_mp3_dec.h"
 #include "esp_audio_types.h"
 
@@ -15,13 +17,61 @@
 #endif
 
 namespace media {
+namespace {
+
+// The component's decoders all share one entry-point shape, so the only thing
+// that differs between formats is which set of functions gets called.
+esp_audio_err_t open_format_decoder(AudioFormat format, void** handle) {
+    switch (format) {
+        case AudioFormat::Mp3:
+            return esp_mp3_dec_open(nullptr, 0, handle);
+        case AudioFormat::Aac:
+            return esp_aac_dec_open(nullptr, 0, handle);
+        case AudioFormat::Flac:
+            return esp_flac_dec_open(nullptr, 0, handle);
+        case AudioFormat::Unknown:
+            break;
+    }
+    return ESP_AUDIO_ERR_NOT_SUPPORT;
+}
+
+esp_audio_err_t decode_format(AudioFormat format, void* handle, esp_audio_dec_in_raw_t* raw,
+                              esp_audio_dec_out_frame_t* out, esp_audio_dec_info_t* info) {
+    switch (format) {
+        case AudioFormat::Mp3:
+            return esp_mp3_dec_decode(handle, raw, out, info);
+        case AudioFormat::Aac:
+            return esp_aac_dec_decode(handle, raw, out, info);
+        case AudioFormat::Flac:
+            return esp_flac_dec_decode(handle, raw, out, info);
+        case AudioFormat::Unknown:
+            break;
+    }
+    return ESP_AUDIO_ERR_NOT_SUPPORT;
+}
+
+esp_audio_err_t close_format_decoder(AudioFormat format, void* handle) {
+    switch (format) {
+        case AudioFormat::Mp3:
+            return esp_mp3_dec_close(handle);
+        case AudioFormat::Aac:
+            return esp_aac_dec_close(handle);
+        case AudioFormat::Flac:
+            return esp_flac_dec_close(handle);
+        case AudioFormat::Unknown:
+            break;
+    }
+    return ESP_AUDIO_ERR_OK;
+}
+
+}  // namespace
 
 EspAudioCodecBackend::~EspAudioCodecBackend() { reset_state(); }
 
 void EspAudioCodecBackend::reset_state() noexcept {
     skipped_bytes_ = 0;
     if (decoder_ != nullptr) {
-        esp_mp3_dec_close(decoder_);
+        close_format_decoder(input_format_, decoder_);
         decoder_ = nullptr;
     }
     stream_ = nullptr;
@@ -77,6 +127,21 @@ AudioDecodeStatus EspAudioCodecBackend::open(AudioStream& stream) noexcept {
         ESP_LOGI(TAG, "Skipped a %u byte ID3v2 tag", static_cast<unsigned>(skipped));
     }
 #endif
+    // Classify the file before opening a decoder: an unsupported container has
+    // to be refused here rather than fed to a decoder that would produce noise.
+    uint8_t head[16] = {};
+    size_t got = 0;
+    stream.read(head, sizeof(head), got);
+    size_t data_offset = 0;
+    input_format_ = sniff_audio_format(head, got, data_offset);
+    if (stream.seek(skipped) != AudioStreamStatus::Ok) {
+        error_ = AudioDecodeStatus::IoError;
+        return error_;
+    }
+    if (input_format_ == AudioFormat::Unknown) {
+        error_ = AudioDecodeStatus::Unsupported;
+        return error_;
+    }
     return open_codec(stream);
 }
 
@@ -84,7 +149,7 @@ AudioDecodeStatus EspAudioCodecBackend::open_codec(AudioStream& stream) noexcept
     // No stream positioning happens here: open() has already dealt with the tag,
     // and reset() must leave the caller's position exactly where it is.
     void* handle = nullptr;
-    const auto result = esp_mp3_dec_open(nullptr, 0, &handle);
+    const auto result = open_format_decoder(input_format_, &handle);
     if (result != ESP_AUDIO_ERR_OK || handle == nullptr) {
         error_ = map_error(result);
         return error_;
@@ -135,7 +200,7 @@ AudioDecodeStatus EspAudioCodecBackend::decode(PcmBlock& block) noexcept {
         out.buffer = reinterpret_cast<uint8_t*>(block.samples);
         out.len = static_cast<uint32_t>(output_bytes);
         esp_audio_dec_info_t info{};
-        const auto result = esp_mp3_dec_decode(decoder_, &raw, &out, &info);
+        const auto result = decode_format(input_format_, decoder_, &raw, &out, &info);
         const std::size_t consumed = std::min<std::size_t>(raw.consumed, input_size_);
         if (consumed != 0) {
             input_size_ -= consumed;
