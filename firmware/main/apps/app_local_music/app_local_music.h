@@ -15,6 +15,7 @@
 #include <media/audio/board_audio_session_port.h>
 #include <media/audio/core_s3_speaker_sink.h>
 #include <media/library/library_store.h>
+#include <media/library/play_mode.h>
 #include <media/local/local_playback_controller.h>
 #include <media/local/playback_pump_task.h>
 #include <mooncake.h>
@@ -63,10 +64,9 @@ private:
         Exit,
     };
 
-    // Cycled by the play-mode button, in the upstream order: sequential stops
-    // at the end of the list, repeat-all wraps, repeat-one replays the same
-    // track, shuffle picks at random.
-    enum class PlayMode : uint8_t { Sequential, RepeatAll, RepeatOne, Shuffle };
+    // Cycled by the play-mode button.  The values and their semantics live in
+    // the library module so the finish policy can be host tested.
+    using PlayMode = media::PlayMode;
 
     void build_list_page();
     void build_player_page();
@@ -79,9 +79,13 @@ private:
     void rebind_rows();
     void sync_scroll_slider();
     void apply_pending_action();
+    // What happens when the current track runs out: advance, repeat or stop,
+    // according to the play mode and where the track sits in the current view.
+    void advance_when_finished();
     void select_track(std::size_t index);
     void start_track(std::size_t index);
-    void step_track(int direction);
+    // Returns false when there is nothing in the view to move to.
+    bool step_track(int direction);
     void refresh_player_page();
     void refresh_spectrum();
     void draw_spectrum_cell(int32_t column, int32_t row, bool lit);

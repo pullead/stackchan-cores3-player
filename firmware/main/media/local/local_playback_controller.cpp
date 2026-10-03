@@ -52,6 +52,8 @@ bool LocalPlaybackController::start() {
     }
 
     error_.clear();
+    // A fresh start is never a continuation of a finished track.
+    finished_atomic_.store(false, std::memory_order_release);
     if (mode_ && !mode_->enter_media({})) {
         error_ = "Media audio ownership unavailable";
         return false;
@@ -196,6 +198,9 @@ void LocalPlaybackController::pump() {
     pending_samples_ = 0;
     pending_offset_ = 0;
     if ((!decoder_ && reader_.remaining_frames() == 0) || (decoder_ && decoder_eof_)) {
+        // The source ran out rather than being stopped: publish that before the
+        // cleanup, because it is what tells the caller to advance.
+        finished_atomic_.store(true, std::memory_order_release);
         stop_pipeline();
     }
 }
@@ -227,12 +232,14 @@ bool LocalPlaybackController::resume() {
 
 void LocalPlaybackController::stop() {
     std::lock_guard<std::recursive_mutex> guard(mutex_);
+    finished_atomic_.store(false, std::memory_order_release);
     stop_pipeline();
     error_.clear();
 }
 
 void LocalPlaybackController::stop_for_ai() {
     std::lock_guard<std::recursive_mutex> guard(mutex_);
+    finished_atomic_.store(false, std::memory_order_release);
     const PlaybackState state = state_machine_.state();
     if (state == PlaybackState::Playing || state == PlaybackState::Paused) {
         state_machine_.transition(PlaybackState::PreparingForAi);
@@ -273,6 +280,8 @@ bool LocalPlaybackController::has_supported_format() const noexcept {
 
 void LocalPlaybackController::fail(std::string error) {
     error_ = std::move(error);
+    // A failure is not the end of a track: nothing should advance off it.
+    finished_atomic_.store(false, std::memory_order_release);
     state_machine_.transition(PlaybackState::Error);
     stop_pipeline();
     // stop_pipeline() deliberately releases the sink and media ownership;

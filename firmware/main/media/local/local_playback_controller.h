@@ -86,6 +86,10 @@ public:
 
     PlaybackState state() const noexcept { return state_atomic_.load(std::memory_order_relaxed); }
     size_t played_frames() const noexcept { return played_atomic_.load(std::memory_order_relaxed); }
+    // True when the current track ran out on its own.  A stop the user asked for
+    // clears it, so "the song ended" stays distinguishable from "the user
+    // stopped it" -- which is what decides whether to advance to the next track.
+    bool finished() const noexcept { return finished_atomic_.load(std::memory_order_acquire); }
     LocalPlaybackSnapshot snapshot() const;
 
 private:
@@ -98,6 +102,7 @@ private:
     std::atomic<size_t> played_atomic_{0};
     std::atomic<uint32_t> rate_atomic_{0};
     std::atomic<uint8_t> channels_atomic_{1};
+    std::atomic<bool> finished_atomic_{false};
     void fail(std::string error);
     void stop_pipeline();
     void close_sink();

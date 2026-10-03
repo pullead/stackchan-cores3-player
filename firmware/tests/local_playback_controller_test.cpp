@@ -466,6 +466,51 @@ bool test_eof_with_frames_writes_final_pcm_before_cleanup() {
            check(stream_closed, "EOF-with-frames closes stream");
 }
 
+// "The track ran out" and "the user stopped it" both end in Idle, and only the
+// first should make the player advance, so the flag has to survive exactly one
+// of them.
+bool test_finished_flag_only_marks_a_natural_end() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    auto* decoder = new FakeDecoder();
+    decoder->eof_with_frames = true;
+    media::LocalPlaybackController controller(sink);
+
+    if (!check(!controller.finished(), "a fresh controller has not finished")) return false;
+
+    controller.select("final.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    if (!check(controller.start(), "finished fixture starts") ||
+        !check(!controller.finished(), "starting clears the flag")) {
+        return false;
+    }
+
+    controller.pump();
+    if (!check(controller.finished(), "running out sets the flag") ||
+        !check(controller.snapshot().state == media::PlaybackState::Idle, "the pipeline is idle")) {
+        return false;
+    }
+
+    controller.stop();
+    return check(!controller.finished(), "a user stop clears the flag");
+}
+
+// A decode failure also ends in a terminal state, but it is not the end of a
+// track, so nothing may advance off it.
+bool test_failed_playback_is_not_a_finished_track() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    auto* decoder = new FakeDecoder();
+    decoder->decode_error = true;
+    media::LocalPlaybackController controller(sink);
+    controller.select("broken.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    if (!check(controller.start(), "error fixture starts")) return false;
+    controller.pump();
+    return check(controller.snapshot().state == media::PlaybackState::Error, "state is Error") &&
+           check(!controller.finished(), "a failure is not a finished track");
+}
+
 }  // namespace
 
 int main() {
@@ -485,5 +530,7 @@ int main() {
     failures += !test_invalid_decoder_block_is_rejected_without_writing();
     failures += !test_stereo_decoder_plays_as_stereo();
     failures += !test_eof_with_frames_writes_final_pcm_before_cleanup();
+    failures += !test_finished_flag_only_marks_a_natural_end();
+    failures += !test_failed_playback_is_not_a_finished_track();
     return failures == 0 ? 0 : 1;
 }

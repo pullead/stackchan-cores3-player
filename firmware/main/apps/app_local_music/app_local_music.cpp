@@ -144,6 +144,7 @@ void AppLocalMusic::onOpen() {
 void AppLocalMusic::onRunning() {
     // Runs outside LVGL event dispatch, so rebuilding the page is safe here.
     apply_pending_action();
+    advance_when_finished();
     refresh_player_page();
 }
 
@@ -969,8 +970,37 @@ void AppLocalMusic::apply_pending_action() {
     }
 }
 
-void AppLocalMusic::step_track(int direction) {
-    if (tracks_.empty() || visible_.empty()) return;
+void AppLocalMusic::advance_when_finished() {
+    if (!playback_ || !playback_->finished()) {
+        return;
+    }
+
+    // Only the controller can tell "the track ran out" from "the user stopped
+    // it"; the mode then decides what that means, and sequential has nothing
+    // left to do once the view ends.
+    const media::FinishAction action =
+        media::action_after_finish(play_mode_, media::is_last_in_view(visible_, current_index_));
+    switch (action) {
+        case media::FinishAction::RestartTrack:
+            start_track(current_index_);
+            return;
+        case media::FinishAction::AdvanceTrack:
+            if (!step_track(1)) {
+                // Nothing in the view to move to: stop so the flag is cleared and
+                // the next tick does not keep retrying.
+                playback_->stop();
+            }
+            return;
+        case media::FinishAction::Stop:
+            // Stop for real: that clears the finished flag so the next tick does
+            // not keep trying to advance off the end of the list.
+            playback_->stop();
+            return;
+    }
+}
+
+bool AppLocalMusic::step_track(int direction) {
+    if (tracks_.empty() || visible_.empty()) return false;
 
     // Navigation follows the view the list was showing, so next/prev stay inside
     // the ★ view when that is what the user was browsing.
@@ -991,7 +1021,7 @@ void AppLocalMusic::step_track(int direction) {
             const std::size_t pick =
                 static_cast<std::size_t>(lv_rand(0, static_cast<uint32_t>(order.size() - 1)));
             start_track(order[pick]);
-            return;
+            return true;
         }
         default:
             break;
@@ -1000,20 +1030,21 @@ void AppLocalMusic::step_track(int direction) {
     if (direction > 0) {
         if (position + 1 >= order.size()) {
             // Sequential stops at the end of the list; repeat-all wraps.
-            if (play_mode_ == PlayMode::Sequential) return;
+            if (play_mode_ == PlayMode::Sequential) return false;
             position = 0;
         } else {
             position += 1;
         }
     } else {
         if (position == 0) {
-            if (play_mode_ == PlayMode::Sequential) return;
+            if (play_mode_ == PlayMode::Sequential) return false;
             position = order.size() - 1;
         } else {
             position -= 1;
         }
     }
     start_track(order[position]);
+    return true;
 }
 
 void AppLocalMusic::select_track(std::size_t index) {

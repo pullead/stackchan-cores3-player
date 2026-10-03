@@ -285,3 +285,11 @@ add_executable(library_store_test
 target_include_directories(library_store_test PRIVATE ../main)
 target_compile_features(library_store_test PRIVATE cxx_std_17)
 add_test(NAME library_store_test COMMAND $<TARGET_FILE:library_store_test>)
+
+add_executable(play_mode_test
+    play_mode_test.cpp
+    host_stubs/no_abort_dialog.cpp
+)
+target_include_directories(play_mode_test PRIVATE ../main)
+target_compile_features(play_mode_test PRIVATE cxx_std_17)
+add_test(NAME play_mode_test COMMAND $<TARGET_FILE:play_mode_test>)
