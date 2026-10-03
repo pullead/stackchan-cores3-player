@@ -75,6 +75,7 @@ private:
     void build_spectrum(lv_obj_t* card);
     void destroy_page();
     void release_resources();
+    void filter_visible_tracks();
     void rebind_rows();
     void sync_scroll_slider();
     void apply_pending_action();
@@ -119,7 +120,13 @@ private:
     static constexpr int32_t kRowPool = 8;
     std::array<lv_obj_t*, kRowPool> row_pool_{};
     std::array<lv_obj_t*, kRowPool> row_title_{};
-    std::array<std::size_t, kRowPool> row_track_{};
+    // What each slot shows: a position in visible_, not a track index, because
+    // the view can be a subset of the library.
+    std::array<std::size_t, kRowPool> row_position_{};
+    // The track indices this list is showing: everything for Songs, the
+    // favourites for ★.  Kept while the player page is open so next/prev follow
+    // the view that was in use.
+    std::vector<std::size_t> visible_;
     int32_t first_row_ = -1;
     // Guards the slider/scroll feedback loop while one is synced from the other.
     bool syncing_slider_ = false;

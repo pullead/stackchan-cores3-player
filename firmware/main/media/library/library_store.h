@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -60,5 +61,11 @@ private:
 // NVS-backed port: one blob in a small NVS namespace.  Never touches the card.
 LibraryStorePort make_nvs_library_store_port();
 #endif
+
+// Indices into `paths` whose track is a favourite, in the order given.  This
+// lives here rather than in the app so the view filter is testable without
+// LVGL, and so the list and any future view agree on what a favourite is.
+std::vector<std::size_t> favourite_indices(const std::vector<std::string>& paths,
+                                           const LibraryStore& store);
 
 }  // namespace media

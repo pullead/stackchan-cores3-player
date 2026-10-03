@@ -70,4 +70,15 @@ bool LibraryStore::toggle_favourite(std::uint32_t id) {
     return !was_favourite;
 }
 
+std::vector<std::size_t> favourite_indices(const std::vector<std::string>& paths,
+                                           const LibraryStore& store) {
+    std::vector<std::size_t> indices;
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        if (store.is_favourite(make_track_id(paths[i]))) {
+            indices.push_back(i);
+        }
+    }
+    return indices;
+}
+
 }  // namespace media

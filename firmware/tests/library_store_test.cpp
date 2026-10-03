@@ -131,5 +131,43 @@ int main() {
         assert(store.last_write_ok());
     }
 
+    // The view filter: indices of the favourites, in library order.
+    {
+        FakeStorage storage;
+        LibraryStore store(port_for(storage));
+        store.load();
+        const std::vector<std::string> paths = {
+            "/audiofiles/a.mp3",
+            "/audiofiles/b.mp3",
+            "/audiofiles/c.mp3",
+            "/Music/D.MP3",
+        };
+        assert(favourite_indices(paths, store).empty());
+
+        // Toggled out of order: the result must still come back in library
+        // order, because that is the order the list shows.
+        store.toggle_favourite(make_track_id(paths[2]));
+        store.toggle_favourite(make_track_id(paths[0]));
+        const auto picked = favourite_indices(paths, store);
+        assert(picked.size() == 2);
+        assert(picked[0] == 0);
+        assert(picked[1] == 2);
+
+        // A path differing only in ASCII case is the same track, which is the
+        // point of folding before hashing.
+        store.toggle_favourite(make_track_id("/music/d.mp3"));
+        const auto with_case = favourite_indices(paths, store);
+        assert(with_case.size() == 3);
+        assert(with_case[2] == 3);
+    }
+
+    // A store with no port has no favourites, so the ★ view is empty rather
+    // than showing a phantom row.
+    {
+        LibraryStore store;
+        const std::vector<std::string> paths = {"/audiofiles/a.mp3"};
+        assert(favourite_indices(paths, store).empty());
+    }
+
     return 0;
 }

@@ -213,7 +213,7 @@ void AppLocalMusic::destroy_page() {
     // pointers behind would let the next rebind write through a freed object.
     row_pool_.fill(nullptr);
     row_title_.fill(nullptr);
-    row_track_.fill(0);
+    row_position_.fill(0);
     first_row_ = -1;
     status_label_ = nullptr;
     player_title_ = nullptr;
@@ -266,8 +266,17 @@ void AppLocalMusic::build_list_page() {
                   LV_ALIGN_CENTER, 0, 0);
     }
 
+    // Which tracks this page shows: the whole library for Songs, the favourites
+    // for ★.  The remaining three tabs need metadata the scanner does not
+    // collect yet, and say so below.
+    filter_visible_tracks();
+
     char header[32] = {};
-    std::snprintf(header, sizeof(header), "共 %u 首", static_cast<unsigned>(tracks_.size()));
+    if (tab_ == Tab::Favourites) {
+        std::snprintf(header, sizeof(header), "收藏 %u 首", static_cast<unsigned>(visible_.size()));
+    } else {
+        std::snprintf(header, sizeof(header), "共 %u 首", static_cast<unsigned>(visible_.size()));
+    }
     status_label_ = make_text(root_, header, hifi_theme::ink_dim(), LV_ALIGN_TOP_RIGHT,
                               hifi_theme::kCountRight, 6);
 
@@ -298,22 +307,25 @@ void AppLocalMusic::build_list_page() {
     // indicator only, not something a finger can grab.
     lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_OFF);
 
-    if (tab_ != Tab::Songs) {
-        // Artists/Albums/Today/Favourites need ID3 tags, import timestamps and
-        // favourites, none of which the scanner collects yet.  Say so instead
-        // of showing an empty list that looks like a failure.
+    if (tab_ == Tab::Artists || tab_ == Tab::Albums || tab_ == Tab::Today) {
+        // These need ID3 tags and import timestamps, which the scanner does not
+        // collect yet.  Say so instead of showing an empty list that looks like
+        // a failure.
         make_text(list_, "该分类需要曲库信息", hifi_theme::ink_dim(), LV_ALIGN_CENTER, 0, 0);
         return;
     }
-    if (tracks_.empty()) {
-        make_text(list_, "未找到音乐文件", hifi_theme::ink_dim(), LV_ALIGN_CENTER, 0, 0);
+    if (visible_.empty()) {
+        // An empty ★ view is not an error, so it does not share the message a
+        // card with no music on it gets.
+        make_text(list_, tab_ == Tab::Favourites ? "尚无收藏" : "未找到音乐文件",
+                  hifi_theme::ink_dim(), LV_ALIGN_CENTER, 0, 0);
         return;
     }
 
     // A spacer carries the full content height: the pool rows alone would give
     // the container almost nothing to scroll over.
     const int32_t content_height =
-        static_cast<int32_t>(tracks_.size()) * hifi_theme::kRowPitch;
+        static_cast<int32_t>(visible_.size()) * hifi_theme::kRowPitch;
     lv_obj_t* spacer = lv_obj_create(list_);
     lv_obj_set_pos(spacer, 0, 0);
     lv_obj_set_size(spacer, 1, content_height);
@@ -720,11 +732,12 @@ void AppLocalMusic::on_row_clicked(lv_event_t* event) {
     auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
     if (self == nullptr) return;
     // The row is a pool slot, so the track it stands for is whatever the last
-    // rebind put there, not something the event itself can carry.
+    // rebind put there: a position in the current view, not a track index.
     for (int32_t slot = 0; slot < kRowPool; ++slot) {
         if (self->row_pool_[slot] == target) {
-            if (self->row_track_[slot] >= self->tracks_.size()) return;
-            self->pending_index_ = self->row_track_[slot];
+            const std::size_t position = self->row_position_[slot];
+            if (position >= self->visible_.size()) return;
+            self->pending_index_ = self->visible_[position];
             self->pending_action_ = PendingAction::SelectTrack;
             return;
         }
@@ -762,13 +775,32 @@ void AppLocalMusic::on_scroll_slider(lv_event_t* event) {
     lv_obj_scroll_to_y(self->list_, range - value, LV_ANIM_OFF);
 }
 
+void AppLocalMusic::filter_visible_tracks() {
+    visible_.clear();
+    if (tab_ == Tab::Favourites) {
+        // The filter itself lives in the library module so it can be host
+        // tested; this only hands it the paths in library order.
+        std::vector<std::string> paths;
+        paths.reserve(tracks_.size());
+        for (const media::SdTrack& track : tracks_) {
+            paths.push_back(track.path);
+        }
+        visible_ = media::favourite_indices(paths, store_);
+        return;
+    }
+    visible_.reserve(tracks_.size());
+    for (std::size_t i = 0; i < tracks_.size(); ++i) {
+        visible_.push_back(i);
+    }
+}
+
 void AppLocalMusic::rebind_rows() {
-    if (list_ == nullptr || row_pool_[0] == nullptr || tracks_.empty()) {
+    if (list_ == nullptr || row_pool_[0] == nullptr || visible_.empty()) {
         return;
     }
     const int32_t scroll_y = lv_obj_get_scroll_y(list_);
     int32_t first = scroll_y / hifi_theme::kRowPitch;
-    const int32_t last_first = static_cast<int32_t>(tracks_.size()) - kRowPool;
+    const int32_t last_first = static_cast<int32_t>(visible_.size()) - kRowPool;
     if (first > last_first) first = last_first;
     if (first < 0) first = 0;
     // Most scroll events do not move a whole row, and rebinding is the only
@@ -778,16 +810,19 @@ void AppLocalMusic::rebind_rows() {
 
     for (int32_t slot = 0; slot < kRowPool; ++slot) {
         lv_obj_t* row = row_pool_[slot];
-        const std::size_t index = static_cast<std::size_t>(first + slot);
-        if (index >= tracks_.size()) {
-            // Fewer tracks than pool slots: keep the surplus rows out of the way.
-            row_track_[slot] = 0;
+        const std::size_t position = static_cast<std::size_t>(first + slot);
+        if (position >= visible_.size()) {
+            // Fewer rows than pool slots: keep the surplus rows out of the way.
+            row_position_[slot] = 0;
             lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
             continue;
         }
-        row_track_[slot] = index;
+        // Rows are laid out by their position in the view, not by track index,
+        // so a filtered view has no gaps where the hidden tracks would be.
+        const std::size_t index = visible_[position];
+        row_position_[slot] = position;
         lv_obj_remove_flag(row, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(row, 0, static_cast<int32_t>(index) * hifi_theme::kRowPitch);
+        lv_obj_set_pos(row, 0, static_cast<int32_t>(position) * hifi_theme::kRowPitch);
         lv_label_set_text(row_title_[slot], tracks_[index].title.empty() ? "未知曲目"
                                                                         : tracks_[index].title.c_str());
     }
@@ -935,38 +970,50 @@ void AppLocalMusic::apply_pending_action() {
 }
 
 void AppLocalMusic::step_track(int direction) {
-    if (tracks_.empty()) return;
+    if (tracks_.empty() || visible_.empty()) return;
 
-    std::size_t next = current_index_;
+    // Navigation follows the view the list was showing, so next/prev stay inside
+    // the ★ view when that is what the user was browsing.
+    const std::vector<std::size_t>& order = visible_;
+    std::size_t position = 0;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        if (order[i] == current_index_) {
+            position = i;
+            break;
+        }
+    }
+
     switch (play_mode_) {
         case PlayMode::RepeatOne:
             break;  // Manual prev/next still moves; only auto-advance repeats.
-        case PlayMode::Shuffle:
+        case PlayMode::Shuffle: {
             // A genuine random pick, as upstream, not a shuffled traversal.
-            next = static_cast<std::size_t>(lv_rand(0, static_cast<uint32_t>(tracks_.size() - 1)));
-            start_track(next);
+            const std::size_t pick =
+                static_cast<std::size_t>(lv_rand(0, static_cast<uint32_t>(order.size() - 1)));
+            start_track(order[pick]);
             return;
+        }
         default:
             break;
     }
 
     if (direction > 0) {
-        if (current_index_ + 1 >= tracks_.size()) {
+        if (position + 1 >= order.size()) {
             // Sequential stops at the end of the list; repeat-all wraps.
             if (play_mode_ == PlayMode::Sequential) return;
-            next = 0;
+            position = 0;
         } else {
-            next = current_index_ + 1;
+            position += 1;
         }
     } else {
-        if (current_index_ == 0) {
+        if (position == 0) {
             if (play_mode_ == PlayMode::Sequential) return;
-            next = tracks_.size() - 1;
+            position = order.size() - 1;
         } else {
-            next = current_index_ - 1;
+            position -= 1;
         }
     }
-    start_track(next);
+    start_track(order[position]);
 }
 
 void AppLocalMusic::select_track(std::size_t index) {
