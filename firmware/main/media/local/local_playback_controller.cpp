@@ -247,6 +247,46 @@ void LocalPlaybackController::stop_for_ai() {
     stop_pipeline();
 }
 
+bool LocalPlaybackController::seek_fraction(float fraction, size_t estimated_total_frames) {
+    std::lock_guard<std::recursive_mutex> guard(mutex_);
+    const PlaybackState state = state_machine_.state();
+    if (state != PlaybackState::Playing && state != PlaybackState::Paused) {
+        return false;
+    }
+    // The in-memory WAV path has no random access; only a streamed track can be
+    // moved, and only when its length is known.
+    if (!stream_ || !decoder_) {
+        return false;
+    }
+    const uint64_t size = stream_->size();
+    if (size == 0) {
+        return false;
+    }
+
+    const float clamped = fraction < 0.0f ? 0.0f : (fraction > 1.0f ? 1.0f : fraction);
+    const uint64_t origin = stream_->tell();
+    const uint64_t target = static_cast<uint64_t>(static_cast<float>(size) * clamped);
+    if (stream_->seek(target) != AudioStreamStatus::Ok) {
+        fail("Could not move within the file");
+        return false;
+    }
+    if (decoder_->reset() != AudioDecodeStatus::Ok) {
+        // Put the stream back.  A decoder that cannot resync would decode from a
+        // position it does not know about, so leaving playback where it was is
+        // the honest outcome of a drag that cannot be honoured.
+        stream_->seek(origin);
+        return false;
+    }
+
+    // Everything queued belongs to the old position.
+    pending_samples_ = 0;
+    pending_offset_ = 0;
+    decoder_eof_ = false;
+    played_frames_ = static_cast<size_t>(static_cast<float>(estimated_total_frames) * clamped);
+    publish_progress();
+    return true;
+}
+
 void LocalPlaybackController::publish_progress() noexcept {
     state_atomic_.store(state_machine_.state(), std::memory_order_relaxed);
     played_atomic_.store(played_frames_, std::memory_order_relaxed);

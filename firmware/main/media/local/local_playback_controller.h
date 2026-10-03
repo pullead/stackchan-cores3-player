@@ -63,6 +63,12 @@ public:
     bool resume();
     void stop();
     void stop_for_ai();
+    // Moves to `fraction` (0..1) of the file.  `estimated_total_frames` (0 when
+    // unknown) only keeps the elapsed clock in step with the new position: the
+    // audio itself is positioned by byte fraction, which is exact for CBR and an
+    // estimate for VBR, the same assumption the displayed duration makes.
+    // Returns false without disturbing playback when the track cannot be moved.
+    bool seek_fraction(float fraction, size_t estimated_total_frames);
     void set_pcm_tap(PcmTap* tap) noexcept { pcm_tap_ = tap; }
 
     // Lock-free progress view.  The audio task holds the mutex for the whole

@@ -63,6 +63,7 @@ private:
         ToggleFavourite,
         ToggleCassette,
         Exit,
+        Seek,
     };
 
     // Cycled by the play-mode button.  The values and their semantics live in
@@ -113,6 +114,9 @@ private:
     static void on_gesture(lv_event_t* event);
     static void on_press_start(lv_event_t* event);
     static void on_list_scrolled(lv_event_t* event);
+    // The progress bar.  A drag is only turned into a seek when the finger
+    // lifts, so the value being dragged is never overwritten by the clock.
+    static void on_progress_event(lv_event_t* event);
 
     media::SdCardPort sd_card_;
     std::unique_ptr<media::BoardAudioCodecPort> codec_port_;
@@ -185,6 +189,9 @@ private:
     PlayMode play_mode_ = PlayMode::Sequential;
     bool cassette_view_ = false;
     int32_t press_start_x_ = 0;
+    float pending_seek_fraction_ = 0.0f;
+    // True while a finger is on the progress bar.
+    bool seeking_ = false;
 
     Tab tab_ = Tab::Songs;
     bool player_page_ = false;

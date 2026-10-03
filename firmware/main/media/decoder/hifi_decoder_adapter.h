@@ -21,6 +21,10 @@ public:
     virtual const AudioMetadata& metadata() const noexcept = 0;
     virtual bool eof() const noexcept = 0;
     virtual AudioDecodeStatus last_error() const noexcept = 0;
+    // See AudioDecoder::reset().  The default is "this backend cannot resync",
+    // so a backend that cannot seek is honest about it instead of decoding from
+    // a position it does not know.
+    virtual AudioDecodeStatus reset() noexcept { return AudioDecodeStatus::Unsupported; }
 };
 
 // StackChan-facing adapter for the latest HiFi decoder flow.  The adapter must
@@ -45,6 +49,7 @@ public:
     const AudioMetadata& metadata() const noexcept override;
     bool eof() const noexcept override;
     AudioDecodeStatus last_error() const noexcept override;
+    AudioDecodeStatus reset() noexcept override;
 
 private:
     std::unique_ptr<HifiDecoderBackend> owned_;

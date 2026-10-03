@@ -77,6 +77,12 @@ AudioDecodeStatus EspMp3DecoderBackend::open(AudioStream& stream) noexcept {
         ESP_LOGI(TAG, "Skipped a %u byte ID3v2 tag", static_cast<unsigned>(skipped));
     }
 #endif
+    return open_codec(stream);
+}
+
+AudioDecodeStatus EspMp3DecoderBackend::open_codec(AudioStream& stream) noexcept {
+    // No stream positioning happens here: open() has already dealt with the tag,
+    // and reset() must leave the caller's position exactly where it is.
     void* handle = nullptr;
     const auto result = esp_mp3_dec_open(nullptr, 0, &handle);
     if (result != ESP_AUDIO_ERR_OK || handle == nullptr) {
@@ -87,6 +93,19 @@ AudioDecodeStatus EspMp3DecoderBackend::open(AudioStream& stream) noexcept {
     stream_ = &stream;
     error_ = AudioDecodeStatus::Ok;
     return error_;
+}
+
+AudioDecodeStatus EspMp3DecoderBackend::reset() noexcept {
+    // The caller has already moved the stream, so the codec is re-opened in
+    // place.  Going through open() would run the ID3 skip, which rewinds to byte
+    // zero whenever the first bytes are not a tag -- silently undoing the seek.
+    AudioStream* stream = stream_;
+    reset_state();
+    if (stream == nullptr) {
+        error_ = AudioDecodeStatus::NotOpen;
+        return error_;
+    }
+    return open_codec(*stream);
 }
 
 AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {

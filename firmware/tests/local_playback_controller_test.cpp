@@ -65,14 +65,21 @@ private:
 class FakeStream final : public media::AudioStream {
 public:
     media::AudioStreamStatus read(uint8_t*, size_t, size_t& count) noexcept override { count = 0; return media::AudioStreamStatus::Eof; }
-    media::AudioStreamStatus seek(uint64_t) noexcept override { return media::AudioStreamStatus::Ok; }
-    uint64_t tell() const noexcept override { return 0; }
-    uint64_t size() const noexcept override { return 0; }
+    media::AudioStreamStatus seek(uint64_t offset) noexcept override { last_seek = offset; ++seek_calls; return seek_result; }
+    uint64_t tell() const noexcept override { return tell_value; }
+    uint64_t size() const noexcept override { return size_value; }
     bool is_open() const noexcept override { return open_; }
     media::AudioStreamStatus close() noexcept override { open_ = false; closed = true;
         if (closed_out != nullptr) *closed_out = true;
         return media::AudioStreamStatus::Ok; }
     bool closed = false;
+    // Seek observation: the controller's move has to land on a byte offset, and
+    // a refusal has to put the stream back where it was.
+    uint64_t last_seek = 0;
+    int seek_calls = 0;
+    media::AudioStreamStatus seek_result = media::AudioStreamStatus::Ok;
+    uint64_t tell_value = 0;
+    uint64_t size_value = 0;
     // The controller owns and destroys this stream, so a test must observe
     // closure through a flag that outlives the fake, never through the fake.
     bool* closed_out = nullptr;
@@ -97,6 +104,9 @@ public:
         return eof_with_frames ? media::AudioDecodeStatus::Eof : media::AudioDecodeStatus::Ok;
     }
     const media::PcmFormat& format() const noexcept override { return pcm; }
+    media::AudioDecodeStatus reset() noexcept override { ++reset_calls; return reset_result; }
+    int reset_calls = 0;
+    media::AudioDecodeStatus reset_result = media::AudioDecodeStatus::Ok;
     const media::AudioMetadata& metadata() const noexcept override { return metadata_; }
     bool eof() const noexcept override { return done; }
     media::AudioDecodeStatus last_error() const noexcept override { return media::AudioDecodeStatus::IoError; }
@@ -511,6 +521,73 @@ bool test_failed_playback_is_not_a_finished_track() {
            check(!controller.finished(), "a failure is not a finished track");
 }
 
+// Seeking positions the stream by byte fraction and then asks the decoder to
+// resync; the elapsed clock has to follow so the bar and the label agree.
+bool test_seek_moves_the_stream_and_resets_the_decoder() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    stream->size_value = 100000;
+    stream->tell_value = 25000;
+    auto* decoder = new FakeDecoder();
+    media::LocalPlaybackController controller(sink);
+    controller.select("seek.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    if (!check(controller.start(), "seek fixture starts")) return false;
+    controller.pump();
+    controller.pump();
+
+    if (!check(controller.seek_fraction(0.5f, 4410000), "a streamed track can be moved")) return false;
+    return check(stream->last_seek == 50000, "the stream lands on the fraction of its size") &&
+           check(decoder->reset_calls == 1, "the decoder is asked to resync once") &&
+           check(controller.played_frames() == 2205000, "the elapsed clock follows the new position") &&
+           check(controller.snapshot().state == media::PlaybackState::Playing, "and playback continues");
+}
+
+// A decoder that cannot resync must not be left decoding from an unknown
+// position: the move is refused and the stream goes back.
+bool test_seek_is_refused_when_the_decoder_cannot_resync() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    stream->size_value = 100000;
+    stream->tell_value = 25000;
+    auto* decoder = new FakeDecoder();
+    decoder->reset_result = media::AudioDecodeStatus::Unsupported;
+    media::LocalPlaybackController controller(sink);
+    controller.select("seek.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    if (!check(controller.start(), "unsupported-reset fixture starts")) return false;
+    controller.pump();
+    controller.pump();
+
+    return check(!controller.seek_fraction(0.5f, 1000), "the move is refused") &&
+           check(stream->last_seek == 25000, "and the stream is put back where it was") &&
+           check(controller.snapshot().state == media::PlaybackState::Playing,
+                 "playback is left undisturbed") &&
+           check(decoder->reset_calls == 1, "the decoder was asked exactly once");
+}
+
+// The in-memory WAV path has no random access, so the drag must be declined
+// rather than silently mis-positioned.
+bool test_seek_is_refused_for_the_in_memory_wav_path() {
+    FakeSink sink;
+    media::LocalPlaybackController controller(sink);
+    controller.select("demo.wav", compatible_wav(6000));
+    if (!check(controller.start(), "wav fixture starts")) return false;
+    return check(!controller.seek_fraction(0.5f, 1000), "the WAV path cannot be moved");
+}
+
+bool test_seek_is_refused_before_playback_starts() {
+    FakeSink sink;
+    auto* stream = new FakeStream();
+    stream->size_value = 100000;
+    auto* decoder = new FakeDecoder();
+    media::LocalPlaybackController controller(sink);
+    controller.select("seek.mp3", std::unique_ptr<media::AudioStream>(stream),
+                      std::unique_ptr<media::AudioDecoder>(decoder));
+    return check(!controller.seek_fraction(0.5f, 1000), "an idle controller refuses a move") &&
+           check(stream->seek_calls == 0, "and never touches the stream");
+}
+
 }  // namespace
 
 int main() {
@@ -532,5 +609,9 @@ int main() {
     failures += !test_eof_with_frames_writes_final_pcm_before_cleanup();
     failures += !test_finished_flag_only_marks_a_natural_end();
     failures += !test_failed_playback_is_not_a_finished_track();
+    failures += !test_seek_moves_the_stream_and_resets_the_decoder();
+    failures += !test_seek_is_refused_when_the_decoder_cannot_resync();
+    failures += !test_seek_is_refused_for_the_in_memory_wav_path();
+    failures += !test_seek_is_refused_before_playback_starts();
     return failures == 0 ? 0 : 1;
 }

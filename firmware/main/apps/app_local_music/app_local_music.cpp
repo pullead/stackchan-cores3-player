@@ -561,6 +561,9 @@ void AppLocalMusic::build_player_page() {
     lv_obj_set_style_shadow_opa(progress_, LV_OPA_50, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(progress_, hifi_theme::ink(), LV_PART_KNOB);
     lv_obj_set_style_pad_all(progress_, 6, LV_PART_KNOB);
+    lv_obj_set_user_data(progress_, this);
+    lv_obj_add_event_cb(progress_, on_progress_event, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(progress_, on_progress_event, LV_EVENT_RELEASED, nullptr);
 
     build_control_bar();
     update_transport_icons();
@@ -927,6 +930,26 @@ void AppLocalMusic::on_list_scrolled(lv_event_t* event) {
     self->sync_scroll_slider();
 }
 
+void AppLocalMusic::on_progress_event(lv_event_t* event) {
+    auto* slider = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(slider));
+    if (self == nullptr) return;
+
+    if (lv_event_get_code(event) == LV_EVENT_PRESSED) {
+        self->seeking_ = true;
+        return;
+    }
+
+    // Only on release: seeking on every value change would issue dozens of seeks
+    // and decoder re-opens during one drag.
+    self->seeking_ = false;
+    const int32_t range = lv_slider_get_max_value(slider);
+    if (range <= 0) return;
+    self->pending_seek_fraction_ =
+        static_cast<float>(lv_slider_get_value(slider)) / static_cast<float>(range);
+    self->pending_action_ = PendingAction::Seek;
+}
+
 void AppLocalMusic::on_transport(lv_event_t* event) {
     auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
     auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
@@ -1034,6 +1057,21 @@ void AppLocalMusic::apply_pending_action() {
             if (player_lyric_ != nullptr) lv_label_set_text(player_lyric_, "磁带视图尚未移植");
             shown_status_.clear();
             cassette_view_ = false;
+            return;
+        }
+        case PendingAction::Seek: {
+            if (!playback_ || total_seconds_ == 0) return;
+            const auto tick = playback_->tick();
+            if (tick.sample_rate == 0) return;
+            // The controller moves by byte fraction; the frame estimate only
+            // keeps the elapsed clock consistent with the new position.
+            playback_->seek_fraction(
+                pending_seek_fraction_,
+                static_cast<std::size_t>(total_seconds_) * static_cast<std::size_t>(tick.sample_rate));
+            // Force the clock and the bar to be redrawn even if the rounded
+            // second happens to be the same.
+            shown_elapsed_.clear();
+            shown_total_.clear();
             return;
         }
         case PendingAction::Exit:
@@ -1305,6 +1343,19 @@ void AppLocalMusic::refresh_player_page() {
     shown_elapsed_ = elapsed;
     shown_total_ = total;
 
+    if (progress_ != nullptr && total_seconds_ > 0 && !seeking_) {
+        // Driven by the same tick as the elapsed label, so the bar and the clock
+        // cannot disagree; left alone while a finger is on it.
+        const int32_t range = lv_slider_get_max_value(progress_);
+        const uint32_t seconds =
+            tick.sample_rate > 0 ? static_cast<uint32_t>(tick.played_frames / tick.sample_rate) : 0;
+        const uint32_t clamped = seconds > total_seconds_ ? total_seconds_ : seconds;
+        lv_slider_set_value(
+            progress_,
+            static_cast<int32_t>(static_cast<int64_t>(clamped) * range /
+                                 static_cast<int64_t>(total_seconds_)),
+            LV_ANIM_OFF);
+    }
     lv_label_set_text(player_state_, shown_status_.c_str());
     if (player_elapsed_ != nullptr) {
         lv_label_set_text(player_elapsed_, shown_elapsed_.c_str());

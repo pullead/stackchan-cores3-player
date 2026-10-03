@@ -45,6 +45,12 @@ public:
     virtual const AudioMetadata& metadata() const noexcept = 0;
     virtual bool eof() const noexcept = 0;
     virtual AudioDecodeStatus last_error() const noexcept = 0;
+
+    // Discards whatever is buffered so the caller can reposition the stream and
+    // keep decoding from there.  A backend that cannot resync leaves this
+    // returning Unsupported, and the caller must then refuse to seek rather than
+    // play from a position the decoder disagrees with.
+    virtual AudioDecodeStatus reset() noexcept { return AudioDecodeStatus::Unsupported; }
 };
 
 }  // namespace media

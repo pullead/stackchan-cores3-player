@@ -21,9 +21,13 @@ public:
     const AudioMetadata& metadata() const noexcept override { return metadata_; }
     bool eof() const noexcept override { return eof_; }
     AudioDecodeStatus last_error() const noexcept override { return error_; }
+    AudioDecodeStatus reset() noexcept override;
 
 private:
     void reset_state() noexcept;
+    // Opens the codec without touching the stream position, so reset() can
+    // re-open in place after the caller has seeked.
+    AudioDecodeStatus open_codec(AudioStream& stream) noexcept;
     AudioDecodeStatus map_error(int error) const noexcept;
     void* decoder_ = nullptr;
     AudioStream* stream_ = nullptr;
