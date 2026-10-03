@@ -533,7 +533,8 @@ bool test_seek_moves_the_stream_and_resets_the_decoder() {
     controller.select("seek.mp3", std::unique_ptr<media::AudioStream>(stream),
                       std::unique_ptr<media::AudioDecoder>(decoder));
     if (!check(controller.start(), "seek fixture starts")) return false;
-    controller.pump();
+    // One pump only: the fake decoder reports Eof on its second call, which
+    // would end the track and make the state Idle before the seek.
     controller.pump();
 
     if (!check(controller.seek_fraction(0.5f, 4410000), "a streamed track can be moved")) return false;
@@ -556,7 +557,7 @@ bool test_seek_is_refused_when_the_decoder_cannot_resync() {
     controller.select("seek.mp3", std::unique_ptr<media::AudioStream>(stream),
                       std::unique_ptr<media::AudioDecoder>(decoder));
     if (!check(controller.start(), "unsupported-reset fixture starts")) return false;
-    controller.pump();
+    // One pump only, for the same reason as the test above.
     controller.pump();
 
     return check(!controller.seek_fraction(0.5f, 1000), "the move is refused") &&
