@@ -163,6 +163,11 @@ private:
     std::size_t pending_index_ = 0;
     Tab pending_tab_ = Tab::Songs;
     std::string selected_title_;
+    // Filled from the track's own tag when it is opened.  The list keeps
+    // filenames: reading a tag per row would put file I/O on the scroll path.
+    std::string selected_artist_;
+    uint32_t total_seconds_ = 0;
+    std::string shown_total_;
     std::string shown_status_;
     std::string shown_elapsed_;
 };

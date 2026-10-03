@@ -267,3 +267,12 @@ add_executable(spectrum_analyzer_test
 target_include_directories(spectrum_analyzer_test PRIVATE ../main)
 target_compile_features(spectrum_analyzer_test PRIVATE cxx_std_17)
 add_test(NAME spectrum_analyzer_test COMMAND $<TARGET_FILE:spectrum_analyzer_test>)
+
+add_executable(mp3_info_test
+    mp3_info_test.cpp
+    ../main/media/library/mp3_info.cpp
+    host_stubs/no_abort_dialog.cpp
+)
+target_include_directories(mp3_info_test PRIVATE ../main)
+target_compile_features(mp3_info_test PRIVATE cxx_std_17)
+add_test(NAME mp3_info_test COMMAND $<TARGET_FILE:mp3_info_test>)

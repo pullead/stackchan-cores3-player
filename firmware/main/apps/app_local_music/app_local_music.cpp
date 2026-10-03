@@ -9,6 +9,7 @@
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
 #include <media/decoder/hifi_decoder_adapter.h>
+#include <media/library/mp3_info.h>
 #include <mooncake_log.h>
 
 #include <algorithm>
@@ -55,6 +56,27 @@ void style_flat(lv_obj_t* object, lv_color_t colour, int32_t radius) {
     lv_obj_set_style_shadow_width(object, 0, 0);
     lv_obj_set_style_pad_all(object, 0, 0);
     lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+// How much of a file's head is read for metadata.  ID3v2 tags run from tens of
+// bytes to over a hundred kilobytes; this covers the common case, including the
+// first MPEG frame, without reading a whole cover art frame off the card.
+constexpr std::size_t kMetadataProbeBytes = 16384;
+
+// Case-insensitive suffix test.  The MPEG reader below only speaks MP3, and WAV
+// PCM that happens to contain a 0xFFEx pattern would otherwise report a
+// nonsense duration for a file that never had one.
+bool ends_with(const std::string& text, const char* suffix) {
+    const std::size_t length = std::char_traits<char>::length(suffix);
+    if (text.size() < length) return false;
+    for (std::size_t i = 0; i < length; ++i) {
+        char character = text[text.size() - length + i];
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+        if (character != suffix[i]) return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -945,8 +967,11 @@ void AppLocalMusic::start_track(std::size_t index) {
     }
     current_index_ = index;
     selected_title_ = tracks_[index].title;
+    selected_artist_.clear();
+    total_seconds_ = 0;
     shown_status_.clear();
     shown_elapsed_.clear();
+    shown_total_.clear();
     analyzer_.reset();
     pcm_tap_.reset();
 
@@ -967,6 +992,39 @@ void AppLocalMusic::start_track(std::size_t index) {
         LvglLockGuard lock;
         if (player_lyric_ != nullptr) lv_label_set_text(player_lyric_, "解码器不可用");
         return;
+    }
+
+    // Read the tag before the decoder takes the stream, then put the read head
+    // back: the decoder starts at byte zero and skips the tag itself.  This is
+    // one bounded read on the app task, not per row on the scroll path.
+    {
+        std::vector<uint8_t> head(kMetadataProbeBytes);
+        std::size_t got = 0;
+        const auto read_status = stream->read(head.data(), head.size(), got);
+        if (read_status != media::AudioStreamStatus::Closed &&
+            read_status != media::AudioStreamStatus::InvalidArgument) {
+            media::Mp3Tags tags;
+            std::size_t tag_bytes = 0;
+            if (media::parse_id3v2_tags(head.data(), got, tags, tag_bytes)) {
+                // The filename stays the title when the tag has none.
+                if (!tags.title.empty()) selected_title_ = tags.title;
+                selected_artist_ = tags.artist;
+            }
+            if (ends_with(tracks_[index].path, ".mp3")) {
+                media::Mp3AudioInfo info;
+                if (media::parse_mp3_audio_info(head.data(), got, tag_bytes, stream->size(), info)) {
+                    total_seconds_ = info.duration_seconds;
+                }
+            }
+        }
+        stream->seek(0);
+    }
+
+    if (selected_title_ != tracks_[index].title) {
+        LvglLockGuard lock;
+        if (player_title_ != nullptr) {
+            lv_label_set_text(player_title_, selected_title_.c_str());
+        }
     }
 
     auto decoder = std::make_unique<media::HifiDecoderAdapter>(std::move(backend));
@@ -1041,18 +1099,36 @@ void AppLocalMusic::refresh_player_page() {
         elapsed = buffer;
     }
 
+    // The line under the title carries the artist while a track is playing, and
+    // the transport state otherwise (buffering, paused, errors).
+    const std::string line =
+        tick.state == media::PlaybackState::Playing && !selected_artist_.empty() ? selected_artist_
+                                                                                : status;
+    std::string total = "--:--";
+    if (total_seconds_ > 0) {
+        char buffer[32] = {};
+        std::snprintf(buffer, sizeof(buffer), "%02u:%02u",
+                      static_cast<unsigned>(total_seconds_ / 60),
+                      static_cast<unsigned>(total_seconds_ % 60));
+        total = buffer;
+    }
+
     LvglLockGuard lock;
     refresh_spectrum();
 
-    if (status == shown_status_ && elapsed == shown_elapsed_) {
+    if (line == shown_status_ && elapsed == shown_elapsed_ && total == shown_total_) {
         return;
     }
-    shown_status_ = status;
+    shown_status_ = line;
     shown_elapsed_ = elapsed;
+    shown_total_ = total;
 
     lv_label_set_text(player_state_, shown_status_.c_str());
     if (player_elapsed_ != nullptr) {
         lv_label_set_text(player_elapsed_, shown_elapsed_.c_str());
+    }
+    if (player_total_ != nullptr) {
+        lv_label_set_text(player_total_, shown_total_.c_str());
     }
     update_transport_icons();
 }
