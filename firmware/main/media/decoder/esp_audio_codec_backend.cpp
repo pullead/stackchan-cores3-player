@@ -1,4 +1,4 @@
-#include "media/decoder/esp_mp3_decoder_backend.h"
+﻿#include "media/decoder/esp_audio_codec_backend.h"
 
 #include "decoder/impl/esp_mp3_dec.h"
 #include "esp_audio_types.h"
@@ -16,9 +16,9 @@
 
 namespace media {
 
-EspMp3DecoderBackend::~EspMp3DecoderBackend() { reset_state(); }
+EspAudioCodecBackend::~EspAudioCodecBackend() { reset_state(); }
 
-void EspMp3DecoderBackend::reset_state() noexcept {
+void EspAudioCodecBackend::reset_state() noexcept {
     skipped_bytes_ = 0;
     if (decoder_ != nullptr) {
         esp_mp3_dec_close(decoder_);
@@ -32,7 +32,7 @@ void EspMp3DecoderBackend::reset_state() noexcept {
     metadata_ = {};
 }
 
-AudioDecodeStatus EspMp3DecoderBackend::map_error(int error) const noexcept {
+AudioDecodeStatus EspAudioCodecBackend::map_error(int error) const noexcept {
     if (error == ESP_AUDIO_ERR_INVALID_PARAMETER) return AudioDecodeStatus::InvalidArgument;
     if (error == ESP_AUDIO_ERR_NOT_SUPPORT) return AudioDecodeStatus::Unsupported;
     if (error == ESP_AUDIO_ERR_DATA_LACK || error == ESP_AUDIO_ERR_CONTINUE) return AudioDecodeStatus::Ok;
@@ -41,7 +41,7 @@ AudioDecodeStatus EspMp3DecoderBackend::map_error(int error) const noexcept {
     return AudioDecodeStatus::Malformed;
 }
 
-std::size_t EspMp3DecoderBackend::skip_id3v2(AudioStream& stream) noexcept {
+std::size_t EspAudioCodecBackend::skip_id3v2(AudioStream& stream) noexcept {
     // An ID3v2 tag sits in front of the audio and can be tens of kilobytes when
     // it carries cover art.  The decoder cannot find a frame inside it and
     // reports a generic failure, so the tag is skipped here instead.
@@ -68,7 +68,7 @@ std::size_t EspMp3DecoderBackend::skip_id3v2(AudioStream& stream) noexcept {
     return total;
 }
 
-AudioDecodeStatus EspMp3DecoderBackend::open(AudioStream& stream) noexcept {
+AudioDecodeStatus EspAudioCodecBackend::open(AudioStream& stream) noexcept {
     reset_state();
     if (!stream.is_open()) { error_ = AudioDecodeStatus::InvalidArgument; return error_; }
     const std::size_t skipped = skip_id3v2(stream);
@@ -80,7 +80,7 @@ AudioDecodeStatus EspMp3DecoderBackend::open(AudioStream& stream) noexcept {
     return open_codec(stream);
 }
 
-AudioDecodeStatus EspMp3DecoderBackend::open_codec(AudioStream& stream) noexcept {
+AudioDecodeStatus EspAudioCodecBackend::open_codec(AudioStream& stream) noexcept {
     // No stream positioning happens here: open() has already dealt with the tag,
     // and reset() must leave the caller's position exactly where it is.
     void* handle = nullptr;
@@ -95,7 +95,7 @@ AudioDecodeStatus EspMp3DecoderBackend::open_codec(AudioStream& stream) noexcept
     return error_;
 }
 
-AudioDecodeStatus EspMp3DecoderBackend::reset() noexcept {
+AudioDecodeStatus EspAudioCodecBackend::reset() noexcept {
     // The caller has already moved the stream, so the codec is re-opened in
     // place.  Going through open() would run the ID3 skip, which rewinds to byte
     // zero whenever the first bytes are not a tag -- silently undoing the seek.
@@ -108,7 +108,7 @@ AudioDecodeStatus EspMp3DecoderBackend::reset() noexcept {
     return open_codec(*stream);
 }
 
-AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
+AudioDecodeStatus EspAudioCodecBackend::decode(PcmBlock& block) noexcept {
     if (decoder_ == nullptr || stream_ == nullptr) { error_ = AudioDecodeStatus::NotOpen; return error_; }
     if (!block.valid()) { error_ = AudioDecodeStatus::InvalidArgument; return error_; }
     block.frames = 0;
@@ -216,11 +216,11 @@ AudioDecodeStatus EspMp3DecoderBackend::decode(PcmBlock& block) noexcept {
     return error_;
 }
 
-std::unique_ptr<HifiDecoderBackend> create_esp_mp3_decoder_backend() noexcept {
+std::unique_ptr<HifiDecoderBackend> create_esp_audio_codec_backend() noexcept {
     // unique_ptr + nothrow: a failed allocation yields an empty pointer instead
     // of terminating inside the audio path, and the backend (with its
     // esp_mp3_dec_open handle) is released as soon as the track is dropped.
-    return std::unique_ptr<HifiDecoderBackend>(new (std::nothrow) EspMp3DecoderBackend());
+    return std::unique_ptr<HifiDecoderBackend>(new (std::nothrow) EspAudioCodecBackend());
 }
 
 }  // namespace media

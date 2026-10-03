@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 
 project(stackchan_firmware_tests LANGUAGES CXX)
 
@@ -198,7 +198,7 @@ add_test(NAME sd_audio_stream_test COMMAND $<TARGET_FILE:sd_audio_stream_test>)
 add_executable(hifi_decoder_adapter_test
     hifi_decoder_adapter_test.cpp
     ../main/media/decoder/hifi_decoder_adapter.cpp
-    host_stubs/esp_mp3_decoder_backend_host_stub.cpp
+    host_stubs/esp_audio_codec_backend_host_stub.cpp
     host_stubs/no_abort_dialog.cpp
 )
 target_include_directories(hifi_decoder_adapter_test PRIVATE ../main)

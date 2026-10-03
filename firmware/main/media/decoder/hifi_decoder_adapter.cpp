@@ -1,6 +1,6 @@
-#include "media/decoder/hifi_decoder_adapter.h"
+﻿#include "media/decoder/hifi_decoder_adapter.h"
 
-#include "media/decoder/esp_mp3_decoder_backend.h"
+#include "media/decoder/esp_audio_codec_backend.h"
 
 namespace media {
 
@@ -72,7 +72,7 @@ std::unique_ptr<HifiDecoderBackend> create_hifi_decoder_backend() noexcept {
     // The ESP-IDF decoder owns no I2S or volume state and is safe to use with
     // StackChan's existing AudioSink.  Arduino Audio remains deliberately
     // unsupported here because it would create a second audio owner.
-    return create_esp_mp3_decoder_backend();
+    return create_esp_audio_codec_backend();
 }
 
 }  // namespace media

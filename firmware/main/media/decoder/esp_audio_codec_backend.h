@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "media/decoder/hifi_decoder_adapter.h"
 
@@ -10,10 +10,10 @@ namespace media {
 
 // ESP-IDF esp_audio_codec MP3 bridge.  It owns only decoder state and an
 // encoded-byte staging buffer; I2S, volume, and storage remain elsewhere.
-class EspMp3DecoderBackend final : public HifiDecoderBackend {
+class EspAudioCodecBackend final : public HifiDecoderBackend {
 public:
-    EspMp3DecoderBackend() noexcept = default;
-    ~EspMp3DecoderBackend() override;
+    EspAudioCodecBackend() noexcept = default;
+    ~EspAudioCodecBackend() override;
 
     AudioDecodeStatus open(AudioStream& stream) noexcept override;
     AudioDecodeStatus decode(PcmBlock& block) noexcept override;
@@ -48,6 +48,6 @@ private:
     AudioDecodeStatus error_ = AudioDecodeStatus::NotOpen;
 };
 
-std::unique_ptr<HifiDecoderBackend> create_esp_mp3_decoder_backend() noexcept;
+std::unique_ptr<HifiDecoderBackend> create_esp_audio_codec_backend() noexcept;
 
 }  // namespace media
