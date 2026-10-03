@@ -276,3 +276,12 @@ add_executable(mp3_info_test
 target_include_directories(mp3_info_test PRIVATE ../main)
 target_compile_features(mp3_info_test PRIVATE cxx_std_17)
 add_test(NAME mp3_info_test COMMAND $<TARGET_FILE:mp3_info_test>)
+
+add_executable(library_store_test
+    library_store_test.cpp
+    ../main/media/library/library_store.cpp
+    host_stubs/no_abort_dialog.cpp
+)
+target_include_directories(library_store_test PRIVATE ../main)
+target_compile_features(library_store_test PRIVATE cxx_std_17)
+add_test(NAME library_store_test COMMAND $<TARGET_FILE:library_store_test>)

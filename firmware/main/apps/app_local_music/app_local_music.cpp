@@ -9,6 +9,7 @@
 #include <hal/hal.h>
 #include <media/audio/volume_policy.h>
 #include <media/decoder/hifi_decoder_adapter.h>
+#include <media/library/library_store.h>
 #include <media/library/mp3_info.h>
 #include <mooncake_log.h>
 
@@ -94,6 +95,13 @@ void AppLocalMusic::onCreate() { mclog::tagInfo(getAppInfo().name, "on create");
 void AppLocalMusic::onOpen() {
     mclog::tagInfo(getAppInfo().name, "on open");
     GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
+
+    // Favourites live in NVS, never on the card: the SD card is shared with
+    // another player and stays read-only here.
+#ifdef ESP_PLATFORM
+    store_ = media::LibraryStore(media::make_nvs_library_store_port());
+    store_.load();
+#endif
 
     auto& board = Board::GetInstance();
     auto* codec = board.GetAudioCodec();
@@ -687,6 +695,15 @@ void AppLocalMusic::update_transport_icons() {
             play_mode_ == PlayMode::Sequential ? hifi_theme::ink_dim() : hifi_theme::accent_bright(),
             0);
     }
+    if (favourite_icon_ != nullptr) {
+        // The CJK font has both stars (U+2605 filled, U+2606 hollow), so the
+        // state reads without relying on colour alone.
+        lv_label_set_text(favourite_icon_, current_favourite_ ? "★" : "☆");
+        lv_obj_set_style_text_color(favourite_icon_,
+                                    current_favourite_ ? hifi_theme::accent_bright()
+                                                       : hifi_theme::ink_dim(),
+                                    0);
+    }
 }
 
 void AppLocalMusic::on_tab_clicked(lv_event_t* event) {
@@ -883,11 +900,16 @@ void AppLocalMusic::apply_pending_action() {
             return;
         }
         case PendingAction::ToggleFavourite: {
-            // Favourites need library storage, which does not exist yet.  Say
-            // so on the lyric line rather than silently doing nothing.
+            if (tracks_.empty() || current_index_ >= tracks_.size()) return;
+            current_favourite_ =
+                store_.toggle_favourite(media::make_track_id(tracks_[current_index_].path));
+            if (!store_.last_write_ok()) {
+                // The star deliberately keeps the old state rather than showing
+                // something that would be gone after a reboot.
+                mclog::tagWarn(getAppInfo().name, "favourite was not persisted");
+            }
             LvglLockGuard lock;
-            if (player_lyric_ != nullptr) lv_label_set_text(player_lyric_, "收藏需要曲库支持");
-            shown_status_.clear();
+            update_transport_icons();
             return;
         }
         case PendingAction::ToggleCassette: {
@@ -1026,6 +1048,8 @@ void AppLocalMusic::start_track(std::size_t index) {
             lv_label_set_text(player_title_, selected_title_.c_str());
         }
     }
+
+    current_favourite_ = store_.is_favourite(media::make_track_id(tracks_[index].path));
 
     auto decoder = std::make_unique<media::HifiDecoderAdapter>(std::move(backend));
     playback_->select(selected_title_, std::move(stream), std::move(decoder));

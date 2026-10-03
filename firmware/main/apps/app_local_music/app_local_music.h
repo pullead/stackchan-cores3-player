@@ -14,6 +14,7 @@
 #include <media/audio/spectrum_analyzer.h>
 #include <media/audio/board_audio_session_port.h>
 #include <media/audio/core_s3_speaker_sink.h>
+#include <media/library/library_store.h>
 #include <media/local/local_playback_controller.h>
 #include <media/local/playback_pump_task.h>
 #include <mooncake.h>
@@ -163,6 +164,10 @@ private:
     std::size_t pending_index_ = 0;
     Tab pending_tab_ = Tab::Songs;
     std::string selected_title_;
+    // Favourite state of the selected track, kept so the star can be redrawn
+    // without a lookup, and the NVS-backed store it comes from.
+    media::LibraryStore store_;
+    bool current_favourite_ = false;
     // Filled from the track's own tag when it is opened.  The list keeps
     // filenames: reading a tag per row would put file I/O on the scroll path.
     std::string selected_artist_;
