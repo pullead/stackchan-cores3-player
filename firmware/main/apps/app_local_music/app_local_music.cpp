@@ -64,6 +64,12 @@ void style_flat(lv_obj_t* object, lv_color_t colour, int32_t radius) {
 // first MPEG frame, without reading a whole cover art frame off the card.
 constexpr std::size_t kMetadataProbeBytes = 16384;
 
+// One file per interval while the list is idle.  A head read borrows the display
+// bus for about ten milliseconds, so spreading the library out is what keeps the
+// list responsive; the whole card is indexed over a few minutes of browsing, one
+// file at a time, and never while a track is playing.
+constexpr uint32_t kIndexIntervalMs = 250;
+
 // Case-insensitive suffix test.  The MPEG reader below only speaks MP3, and WAV
 // PCM that happens to contain a 0xFFEx pattern would otherwise report a
 // nonsense duration for a file that never had one.
@@ -137,6 +143,13 @@ void AppLocalMusic::onOpen() {
     // application-level LVGL lock.  It also unmounts before returning.
     tracks_ = sd_card_.browse_tracks();
 
+    // Nothing is indexed yet: every row falls back to its filename until the
+    // indexer has read that file.
+    metadata_.assign(tracks_.size(), media::Mp3Tags{});
+    indexed_.assign(tracks_.size(), 0);
+    index_cursor_ = 0;
+    last_index_tick_ = lv_tick_get();
+
     LvglLockGuard lock;
     build_list_page();
 }
@@ -145,6 +158,7 @@ void AppLocalMusic::onRunning() {
     // Runs outside LVGL event dispatch, so rebuilding the page is safe here.
     apply_pending_action();
     advance_when_finished();
+    index_one_track_when_idle();
     refresh_player_page();
 }
 
@@ -178,6 +192,9 @@ void AppLocalMusic::release_resources() {
         destroy_page();
     }
     tracks_.clear();
+    metadata_.clear();
+    indexed_.clear();
+    index_cursor_ = 0;
     player_page_ = false;
     pending_action_ = PendingAction::None;
     selected_title_.clear();
@@ -214,6 +231,7 @@ void AppLocalMusic::destroy_page() {
     // pointers behind would let the next rebind write through a freed object.
     row_pool_.fill(nullptr);
     row_title_.fill(nullptr);
+    row_artist_.fill(nullptr);
     row_position_.fill(0);
     first_row_ = -1;
     status_label_ = nullptr;
@@ -362,6 +380,7 @@ void AppLocalMusic::build_list_page() {
 
         row_pool_[slot] = row;
         row_title_[slot] = title_label;
+        row_artist_[slot] = detail;
     }
 
     lv_obj_set_user_data(list_, this);
@@ -795,6 +814,67 @@ void AppLocalMusic::filter_visible_tracks() {
     }
 }
 
+const char* AppLocalMusic::row_title_for(std::size_t index) const {
+    if (index < metadata_.size() && indexed_[index] != 0 && !metadata_[index].title.empty()) {
+        return metadata_[index].title.c_str();
+    }
+    if (index >= tracks_.size()) return "未知曲目";
+    return tracks_[index].title.empty() ? "未知曲目" : tracks_[index].title.c_str();
+}
+
+const char* AppLocalMusic::row_artist_for(std::size_t index) const {
+    if (index < metadata_.size() && indexed_[index] != 0 && !metadata_[index].artist.empty()) {
+        return metadata_[index].artist.c_str();
+    }
+    // ID3 metadata is not read for this track yet; the slot is kept so the row
+    // layout does not shift once it is.
+    return "未知艺术家";
+}
+
+void AppLocalMusic::index_one_track_when_idle() {
+    if (tracks_.empty() || index_cursor_ >= tracks_.size()) return;
+
+    // Two conditions, both load-bearing.  The list page means the user is
+    // browsing rather than listening, and an idle controller means the pump task
+    // is not going to borrow the SD bus under us -- the handoff is global and not
+    // reentrant, so overlapping borrowers would break playback.
+    if (player_page_) return;
+    if (playback_ && playback_->tick().state != media::PlaybackState::Idle) return;
+
+    const uint32_t now = lv_tick_get();
+    if (now - last_index_tick_ < kIndexIntervalMs) return;
+    last_index_tick_ = now;
+
+    std::size_t index = index_cursor_;
+    while (index < tracks_.size() && indexed_[index] != 0) ++index;
+    if (index >= tracks_.size()) {
+        index_cursor_ = index;
+        return;
+    }
+
+    std::vector<uint8_t> head;
+    std::size_t tag_bytes = 0;
+    if (sd_card_.read_head(tracks_[index], head, kMetadataProbeBytes)) {
+        media::Mp3Tags tags;
+        if (media::parse_id3v2_tags(head.data(), head.size(), tags, tag_bytes)) {
+            metadata_[index] = std::move(tags);
+        }
+    }
+    // Marked either way: a file with no readable tag keeps its filename, and
+    // retrying it every tick would never end.
+    indexed_[index] = 1;
+    index_cursor_ = index + 1;
+
+    {
+        // Let the visible rows pick the new title up now rather than on the next
+        // scroll.  onRunning() is outside LVGL event dispatch, so taking the lock
+        // here is safe.
+        LvglLockGuard lock;
+        first_row_ = -1;
+        rebind_rows();
+    }
+}
+
 void AppLocalMusic::rebind_rows() {
     if (list_ == nullptr || row_pool_[0] == nullptr || visible_.empty()) {
         return;
@@ -824,8 +904,8 @@ void AppLocalMusic::rebind_rows() {
         row_position_[slot] = position;
         lv_obj_remove_flag(row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(row, 0, static_cast<int32_t>(position) * hifi_theme::kRowPitch);
-        lv_label_set_text(row_title_[slot], tracks_[index].title.empty() ? "未知曲目"
-                                                                        : tracks_[index].title.c_str());
+        lv_label_set_text(row_title_[slot], row_title_for(index));
+        lv_label_set_text(row_artist_[slot], row_artist_for(index));
     }
 }
 

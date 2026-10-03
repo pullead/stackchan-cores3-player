@@ -15,6 +15,7 @@
 #include <media/audio/board_audio_session_port.h>
 #include <media/audio/core_s3_speaker_sink.h>
 #include <media/library/library_store.h>
+#include <media/library/mp3_info.h>
 #include <media/library/play_mode.h>
 #include <media/local/local_playback_controller.h>
 #include <media/local/playback_pump_task.h>
@@ -78,6 +79,14 @@ private:
     void filter_visible_tracks();
     void rebind_rows();
     void sync_scroll_slider();
+    // Reads one track's tag per call, and only while the list is showing and
+    // nothing is playing: the pump task and this would otherwise borrow the same
+    // SD/display bus, which is not reentrant.
+    void index_one_track_when_idle();
+    // The cached title/artist when the track has been indexed, the filename and
+    // a placeholder otherwise.
+    const char* row_title_for(std::size_t index) const;
+    const char* row_artist_for(std::size_t index) const;
     void apply_pending_action();
     // What happens when the current track runs out: advance, repeat or stop,
     // according to the play mode and where the track sits in the current view.
@@ -117,6 +126,13 @@ private:
     std::unique_ptr<media::PlaybackPumpTask> pump_task_;
 
     std::vector<media::SdTrack> tracks_;
+    // Metadata read for the list, filled in progressively by the indexer.  The
+    // vectors are parallel to tracks_ on purpose: the list needs a cheap lookup
+    // by index, not by path.
+    std::vector<media::Mp3Tags> metadata_;
+    std::vector<uint8_t> indexed_;
+    std::size_t index_cursor_ = 0;
+    uint32_t last_index_tick_ = 0;
 
     // The list keeps a fixed pool of row widgets and rebinds them to whatever
     // is on screen.  One LVGL object per track only worked while the scanner
@@ -124,6 +140,7 @@ private:
     static constexpr int32_t kRowPool = 8;
     std::array<lv_obj_t*, kRowPool> row_pool_{};
     std::array<lv_obj_t*, kRowPool> row_title_{};
+    std::array<lv_obj_t*, kRowPool> row_artist_{};
     // What each slot shows: a position in visible_, not a track index, because
     // the view can be a subset of the library.
     std::array<std::size_t, kRowPool> row_position_{};

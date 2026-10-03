@@ -9,7 +9,7 @@ namespace media {
 SdCardPort::SdCardPort()
 #ifdef ESP_PLATFORM
     : handoff_(&board::get_spi3_display_handoff()),
-      operations_{this, mount_hardware, list_hardware_tracks, unmount_hardware}
+      operations_{this, mount_hardware, list_hardware_tracks, unmount_hardware, read_head_hardware}
 #endif
 {}
 
@@ -77,10 +77,10 @@ const std::string& SdCardPort::last_error() const noexcept {
     return last_error_;
 }
 
-std::unique_ptr<AudioStream> SdCardPort::open_track(const SdTrack& track) {
 #ifdef ESP_PLATFORM
+SdAudioFileOperations SdCardPort::make_file_operations(void* context) {
     SdAudioFileOperations operations{};
-    operations.context = this;
+    operations.context = context;
     operations.mount = mount_hardware;
     operations.open = [](void*, std::string_view path, void*& handle, uint64_t& size, std::string& error) {
         FILE* file = fopen(std::string(path).c_str(), "rb");
@@ -102,7 +102,52 @@ std::unique_ptr<AudioStream> SdCardPort::open_track(const SdTrack& track) {
     };
     operations.close = [](void*, void* handle, std::string& error) { if (fclose(static_cast<FILE*>(handle)) != 0) { error = "SD audio close failed"; return false; } return true; };
     operations.unmount = unmount_hardware;
-    auto card_stream = std::make_unique<SdAudioStream>(*handoff_, operations, track.path);
+    return operations;
+}
+
+bool SdCardPort::read_head_hardware(void* context, std::string_view path, std::vector<uint8_t>& buffer,
+                                    std::size_t max_bytes, std::string& error) {
+    buffer.clear();
+    if (max_bytes == 0) return true;
+    auto* port = static_cast<SdCardPort*>(context);
+    if (port == nullptr || port->handoff_ == nullptr) {
+        error = "SD card is not initialized";
+        return false;
+    }
+
+    // Same stream the player uses, minus the prefetch ring and its task: one
+    // borrow, one burst, close.  The indexer reads one file at a time so this is
+    // never more than a single bus borrow.
+    SdAudioStream stream(*port->handoff_, make_file_operations(port), std::string(path));
+    if (!stream.is_open()) {
+        error = "cannot open SD audio file for metadata";
+        return false;
+    }
+
+    buffer.resize(max_bytes);
+    std::size_t total = 0;
+    while (total < max_bytes) {
+        std::size_t got = 0;
+        const AudioStreamStatus status = stream.read(buffer.data() + total, max_bytes - total, got);
+        total += got;
+        if (status == AudioStreamStatus::Eof) break;
+        if (status != AudioStreamStatus::Ok) {
+            stream.close();
+            buffer.clear();
+            error = "SD metadata read failed";
+            return false;
+        }
+        if (got == 0) break;
+    }
+    stream.close();
+    buffer.resize(total);
+    return total > 0;
+}
+#endif
+
+std::unique_ptr<AudioStream> SdCardPort::open_track(const SdTrack& track) {
+#ifdef ESP_PLATFORM
+    auto card_stream = std::make_unique<SdAudioStream>(*handoff_, make_file_operations(this), track.path);
     if (!card_stream->is_open()) {
         return card_stream;  // Let the caller report the open failure.
     }
@@ -113,6 +158,15 @@ std::unique_ptr<AudioStream> SdCardPort::open_track(const SdTrack& track) {
     (void)track;
     return nullptr;
 #endif
+}
+
+bool SdCardPort::read_head(const SdTrack& track, std::vector<uint8_t>& buffer, std::size_t max_bytes) {
+    buffer.clear();
+    if (operations_.read_head == nullptr) {
+        last_error_ = "SD head reads are not available";
+        return false;
+    }
+    return operations_.read_head(operations_.context, track.path, buffer, max_bytes, last_error_);
 }
 
 bool SdCardPort::operations_ready() const noexcept {

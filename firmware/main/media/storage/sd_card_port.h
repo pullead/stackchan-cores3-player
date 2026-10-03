@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include "media/decoder/audio_stream.h"
+#include "media/storage/sd_audio_stream.h"
 
 namespace board {
 class Spi3DisplayHandoff;
@@ -58,6 +59,10 @@ struct SdCardOperations {
     bool (*mount)(void* context, std::string& error) = nullptr;
     bool (*list_tracks)(void* context, std::vector<SdTrack>& tracks, std::string& error) = nullptr;
     bool (*unmount)(void* context, std::string& error) = nullptr;
+    // Optional.  Reads the first bytes of a file for the metadata indexer, which
+    // must not pay for a prefetch ring and a task per file.
+    bool (*read_head)(void* context, std::string_view path, std::vector<uint8_t>& buffer,
+                      std::size_t max_bytes, std::string& error) = nullptr;
 };
 
 class SdCardPort {
@@ -71,6 +76,9 @@ public:
 
     std::vector<SdTrack> browse_tracks();
     std::unique_ptr<AudioStream> open_track(const SdTrack& track);
+    // Reads up to `max_bytes` from the start of a track through the same bus
+    // handoff the player uses, but without the playback stream.
+    bool read_head(const SdTrack& track, std::vector<uint8_t>& buffer, std::size_t max_bytes);
     const std::string& last_error() const noexcept;
 
 private:
@@ -81,6 +89,11 @@ private:
     static bool mount_hardware(void* context, std::string& error);
     static bool list_hardware_tracks(void* context, std::vector<SdTrack>& tracks, std::string& error);
     static bool unmount_hardware(void* context, std::string& error);
+    static bool read_head_hardware(void* context, std::string_view path, std::vector<uint8_t>& buffer,
+                                   std::size_t max_bytes, std::string& error);
+    // The file callbacks SdAudioStream needs to read one card file.  Both the
+    // player and the metadata indexer go through this, so they cannot drift.
+    static SdAudioFileOperations make_file_operations(void* context);
 #endif
 
     board::Spi3DisplayHandoff* handoff_ = nullptr;

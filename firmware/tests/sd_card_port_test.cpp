@@ -148,6 +148,61 @@ media::SdCardOperations make_sd_operations(FakeBrowseContext& context) {
     return {&context, mount_sd, list_sd, unmount_sd};
 }
 
+struct HeadContext {
+    std::vector<uint8_t> bytes;
+    std::string last_path;
+    bool fail = false;
+};
+
+bool read_head_fake(void* context, std::string_view path, std::vector<uint8_t>& buffer,
+                    std::size_t max_bytes, std::string& error) {
+    auto* head = static_cast<HeadContext*>(context);
+    head->last_path = std::string(path);
+    if (head->fail) {
+        error = "head read rejected";
+        return false;
+    }
+    const std::size_t count = max_bytes < head->bytes.size() ? max_bytes : head->bytes.size();
+    buffer = head->bytes;
+    buffer.resize(count);
+    return true;
+}
+
+bool test_read_head_delegates_to_the_operation() {
+    HeadContext head;
+    head.bytes = {1, 2, 3, 4, 5};
+    FakeBrowseContext browse;
+    auto handoff = make_handoff(browse);
+    media::SdCardPort port(handoff, media::SdCardOperations{&head, nullptr, nullptr, nullptr, read_head_fake});
+
+    const media::SdTrack track{"audiofiles/one.mp3", "one", 5};
+    std::vector<uint8_t> buffer;
+    if (!check(port.read_head(track, buffer, 3), "head read succeeds") ||
+        !check(buffer == std::vector<uint8_t>{1, 2, 3}, "the caller's limit is honoured") ||
+        !check(head.last_path == "audiofiles/one.mp3", "the track path is passed through")) {
+        return false;
+    }
+
+    // A file shorter than the probe returns what it has rather than padding.
+    if (!check(port.read_head(track, buffer, 99), "a short file still reads") ||
+        !check(buffer.size() == 5, "and returns only its own bytes")) {
+        return false;
+    }
+
+    head.fail = true;
+    return check(!port.read_head(track, buffer, 3), "a failed read is reported") &&
+           check(buffer.empty(), "and leaves no partial bytes behind") &&
+           check(port.last_error() == "head read rejected", "and the operation's error is preserved");
+}
+
+bool test_read_head_without_an_operation_is_a_clear_failure() {
+    media::SdCardPort port;
+    const media::SdTrack track{"audiofiles/one.mp3", "one", 0};
+    std::vector<uint8_t> buffer;
+    return check(!port.read_head(track, buffer, 8), "a port without a head reader fails") &&
+           check(port.last_error() == "SD head reads are not available", "and names the reason");
+}
+
 bool test_browse_is_one_atomic_handoff_transaction() {
     FakeBrowseContext context;
     auto handoff = make_handoff(context);
@@ -261,5 +316,7 @@ int main() {
     failures += !test_unmount_failure_clears_tracks_and_releases();
     failures += !test_release_failure_discards_tracks_and_guard_retries_before_unlock();
     failures += !test_default_host_port_reports_hardware_only();
+    failures += !test_read_head_delegates_to_the_operation();
+    failures += !test_read_head_without_an_operation_is_a_clear_failure();
     return failures == 0 ? 0 : 1;
 }
