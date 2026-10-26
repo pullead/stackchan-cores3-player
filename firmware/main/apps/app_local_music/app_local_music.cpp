@@ -1193,6 +1193,10 @@ void AppLocalMusic::select_track(std::size_t index) {
     // A track whose format is known unsupported stays on the list: the row
     // already says so, and opening a player page for it would only mislead.
     if (index < playable_.size() && playable_[index] == kFormatUnsupported) {
+        // 点击必须有可见反馈：此前这里静默返回，看起来像触摸失灵。
+        mclog::tagWarn(getAppInfo().name, "refused unsupported format: {}", tracks_[index].path);
+        LvglLockGuard lock;
+        if (status_label_ != nullptr) lv_label_set_text(status_label_, "该曲格式不支持");
         return;
     }
 

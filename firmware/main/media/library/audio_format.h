@@ -26,14 +26,18 @@ inline AudioFormat sniff_audio_format(const std::uint8_t* data, std::size_t size
 
     // An ID3v2 tag can sit in front of the audio; the size is four synchsafe
     // bytes (seven significant bits each) that exclude the ten-byte header.
+    bool tagged = false;
     if (size >= 10 && data[0] == 'I' && data[1] == 'D' && data[2] == '3') {
         const std::size_t payload = (static_cast<std::size_t>(data[6] & 0x7F) << 21) |
                                     (static_cast<std::size_t>(data[7] & 0x7F) << 14) |
                                     (static_cast<std::size_t>(data[8] & 0x7F) << 7) |
                                     static_cast<std::size_t>(data[9] & 0x7F);
         offset = 10 + payload;
+        tagged = true;
+        // 内嵌封面的标签常有几十到上百 KB，远超调用方读取的文件头。ID3v2
+        // 几乎只出现在 MP3 上，因此按 MP3 处理，由解码器自行定位第一帧。
         if (offset + 4 > size) {
-            return AudioFormat::Unknown;
+            return AudioFormat::Mp3;
         }
     }
 
@@ -54,6 +58,13 @@ inline AudioFormat sniff_audio_format(const std::uint8_t* data, std::size_t size
         if ((at[1] & 0xE0) == 0xE0) {
             return AudioFormat::Mp3;
         }
+    }
+
+    // 标签之后不一定紧跟帧头：不少文件在标签后还有填充或垃圾字节，MP3
+    // 解码器会自行重新同步。带标签的文件因此仍按 MP3 处理；不带标签的
+    // 文件则保持严格判定，以免把 Ogg/WAV 之类喂给 MP3 解码器。
+    if (tagged) {
+        return AudioFormat::Mp3;
     }
 
     return AudioFormat::Unknown;

@@ -134,6 +134,11 @@ AudioDecodeStatus EspAudioCodecBackend::open(AudioStream& stream) noexcept {
     stream.read(head, sizeof(head), got);
     size_t data_offset = 0;
     input_format_ = sniff_audio_format(head, got, data_offset);
+    // 此处的流已越过标签，判定函数看不到它。带标签却在标签后认不出帧头
+    // 的文件（标签后有填充字节）与列表索引的判定保持一致，按 MP3 交给解码器。
+    if (input_format_ == AudioFormat::Unknown && skipped != 0) {
+        input_format_ = AudioFormat::Mp3;
+    }
     if (stream.seek(skipped) != AudioStreamStatus::Ok) {
         error_ = AudioDecodeStatus::IoError;
         return error_;
