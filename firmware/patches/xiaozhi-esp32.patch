@@ -1,8 +1,26 @@
 diff --git a/main/application.cc b/main/application.cc
-index d69d43d..3b6f07e 100644
+index d69d43d..5be5673 100644
 --- a/main/application.cc
 +++ b/main/application.cc
-@@ -610,33 +610,36 @@ void Application::InitializeProtocol() {
+@@ -432,11 +432,13 @@ void Application::CheckNewVersion() {
+         retry_count = 0;
+         retry_delay = 10; // Reset retry delay
+ 
++        // StackChan CoreS3 播放器固件：不自动升级。服务器上的新版本是官方固件，
++        // 升级会写进 ota_1 并重启进去——既覆盖存放在 ota_1 的屏保壁纸，也会用
++        // 官方固件替换掉本地播放器等定制功能。版本检查本身保留：它还负责设备
++        // 激活。需要升级时从 SETUP 的「关于」页手动进行。
+         if (ota_->HasNewVersion()) {
+-            if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
+-                return; // This line will never be reached after reboot
+-            }
+-            // If upgrade failed, continue to normal operation
++            ESP_LOGW(TAG, "New firmware %s available, auto-upgrade disabled in this build",
++                     ota_->GetFirmwareVersion().c_str());
+         }
+ 
+         // No new version, mark the current version as valid
+@@ -610,33 +612,36 @@ void Application::InitializeProtocol() {
  }
  
  void Application::ShowActivationCode(const std::string& code, const std::string& message) {
@@ -246,7 +264,7 @@ index 3692e0c..7bfbc5c 100644
      // Strategy instance
      std::unique_ptr<AssetStrategy> strategy_;
 diff --git a/main/boards/common/i2c_device.cc b/main/boards/common/i2c_device.cc
-index 835997d..ea50d51 100644
+index 835997d..d957b70 100644
 --- a/main/boards/common/i2c_device.cc
 +++ b/main/boards/common/i2c_device.cc
 @@ -32,4 +32,8 @@ uint8_t I2cDevice::ReadReg(uint8_t reg) {
