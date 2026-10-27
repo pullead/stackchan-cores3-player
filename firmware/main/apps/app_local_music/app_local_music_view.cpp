@@ -845,15 +845,9 @@ void AppLocalMusic::load_cover(const uint8_t* jpeg, std::size_t length) {
     }
 }
 
-void AppLocalMusic::refresh_view() {
-    if (root_ == nullptr) return;
-
-    // tick() is lock-free: taking the controller mutex here would mean waiting
-    // for the audio task to finish a whole chunk, so the clock would advance in
-    // multi-second jumps instead of smoothly.
+std::string AppLocalMusic::status_line() const {
     const media::LocalPlaybackController::PlaybackTick tick =
         playback_ ? playback_->tick() : media::LocalPlaybackController::PlaybackTick{};
-
     // 状态行：播放中显示格式与采样率（比「播放中」更有信息量），其余时候
     // 显示缓冲、暂停、出错等状态。格式信息原先单独占图标行，会挤到频谱。
     std::string info = playback_status(tick.state);
@@ -866,6 +860,18 @@ void AppLocalMusic::refresh_view() {
                       static_cast<unsigned>((tick.sample_rate % 1000) / 100));
         info = extension_label(tracks_[current_index_].path) + rate;
     }
+    return info;
+}
+
+void AppLocalMusic::refresh_view(const std::string& info) {
+    if (root_ == nullptr) return;
+
+    // tick() is lock-free: taking the controller mutex here would mean waiting
+    // for the audio task to finish a whole chunk, so the clock would advance in
+    // multi-second jumps instead of smoothly.
+    const media::LocalPlaybackController::PlaybackTick tick =
+        playback_ ? playback_->tick() : media::LocalPlaybackController::PlaybackTick{};
+
     if (info != shown_info_) {
         shown_info_ = info;
         lv_label_set_text(info_label_, shown_info_.c_str());

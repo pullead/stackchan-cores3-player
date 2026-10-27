@@ -153,8 +153,12 @@ void AppLocalMusic::onRunning() {
     apply_pending_action();
     advance_when_finished();
     index_one_track_when_idle();
+    // 状态文字在拿 LVGL 锁之前算好：出错时它要拿播放控制器的互斥锁读错误
+    // 文本，而播放任务关闭文件流时是先持有控制器锁、再借总线（要 LVGL 锁）。
+    // 两边顺序相反，持着 LVGL 锁去拿控制器锁就可能互相等死。
+    const std::string info = status_line();
     LvglLockGuard lock;
-    refresh_view();
+    refresh_view(info);
 }
 
 AppLocalMusic::~AppLocalMusic() {

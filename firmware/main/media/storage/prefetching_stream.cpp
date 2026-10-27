@@ -1,5 +1,7 @@
 #include "media/storage/prefetching_stream.h"
 
+#include "media/rtos_sleep.h"
+
 #include <algorithm>
 #include <vector>
 
@@ -141,8 +143,10 @@ void PrefetchingStream::stop_task() noexcept {
 #ifdef ESP_PLATFORM
     if (handle_ == nullptr && !running_.load(std::memory_order_acquire)) return;
     stop_requested_.store(true, std::memory_order_release);
+    // 必须真正阻塞：调用方（播放任务）优先级高于预读任务且在同一核上，
+    // 只是让出 CPU 的话预读任务永远跑不到退出那一步。
     while (running_.load(std::memory_order_acquire)) {
-        vTaskDelay(pdMS_TO_TICKS(1));
+        sleep_at_least_ms(1);
     }
     handle_ = nullptr;
     stop_requested_.store(false, std::memory_order_release);
@@ -173,8 +177,9 @@ void PrefetchingStream::run() noexcept {
     while (!stop_requested_.load(std::memory_order_acquire)) {
         if (!fill_once()) {
             // Either the ring is full or the source is done; either way there
-            // is nothing useful to do right now.
-            vTaskDelay(pdMS_TO_TICKS(5));
+            // is nothing useful to do right now.  pdMS_TO_TICKS(5) 在 100 Hz
+            // 节拍下是 0，原来这里在环满时空转，抢占同核低优先级任务。
+            sleep_at_least_ms(5);
         }
     }
 }

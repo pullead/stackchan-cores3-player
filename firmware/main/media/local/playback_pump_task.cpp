@@ -1,5 +1,7 @@
 #include "media/local/playback_pump_task.h"
 
+#include "media/rtos_sleep.h"
+
 #ifdef ESP_PLATFORM
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -132,11 +134,15 @@ void PlaybackPumpTask::stop() noexcept {
     // decode in flight.  An overrun means the pump is stuck in an SD borrow or
     // an I2S write, which is worth seeing in the log rather than guessing at.
     uint32_t waited_ms = 0;
+    uint32_t next_warning_ms = 1000;
     while (running()) {
-        vTaskDelay(pdMS_TO_TICKS(1));
-        if (++waited_ms % 1000 == 0) {
+        // 按节拍真正阻塞（见 rtos_sleep.h），计数用实际经过的毫秒数。
+        sleep_at_least_ms(1);
+        waited_ms += slept_ms(1);
+        if (waited_ms >= next_warning_ms) {
             ESP_LOGW(TAG, "Still waiting for the media pump to stop (%lu ms)",
                      static_cast<unsigned long>(waited_ms));
+            next_warning_ms += 1000;
         }
     }
 }

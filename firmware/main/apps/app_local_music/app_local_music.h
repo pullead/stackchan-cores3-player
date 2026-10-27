@@ -103,7 +103,10 @@ private:
     void rebind_rows(bool force);
     void show_track_info();
     void update_controls();
-    void refresh_view();
+    // 状态行文字。会读控制器的错误文本（要拿它的互斥锁），所以必须在
+    // 持有 LVGL 锁之前调用，再把结果交给 refresh_view()。
+    std::string status_line() const;
+    void refresh_view(const std::string& info);
     void refresh_spectrum();
     void scroll_to_list(bool animate);
     void scroll_to_player(bool animate);
