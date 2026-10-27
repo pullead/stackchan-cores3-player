@@ -36,6 +36,10 @@ void AppLauncher::onLauncherOpen()
 
 void AppLauncher::onLauncherRunning()
 {
+    // 动态壁纸的 JPEG 解码约 20 ms，放在 LVGL 锁外，免得每帧卡住界面刷新；
+    // 拿到锁之后只把解好的那块缓冲换上屏幕。
+    const bool wallpaper_frame = _wallpaper && _wallpaper->decode_next(GetHAL().millis());
+
     LvglLockGuard lock;
 
     if (_startup_worker) {
@@ -48,6 +52,9 @@ void AppLauncher::onLauncherRunning()
     } else {
         _view->update();
         screensaver_update();
+        if (wallpaper_frame && _wallpaper) {
+            _wallpaper->present();
+        }
     }
 
     GetStackChan().update();
@@ -59,6 +66,7 @@ void AppLauncher::onLauncherClose()
 
     LvglLockGuard lock;
 
+    stop_screensaver();
     _view.reset();
 }
 
@@ -83,12 +91,23 @@ void AppLauncher::screensaver_update()
 
     uint32_t idle_time = lv_display_get_inactive_time(NULL);
     if (idle_time >= SCREENSAVER_TIMEOUT_MS) {
-        if (!_screensaver) {
-            _screensaver = std::make_unique<view::Screensaver>();
-            _screensaver->init();
+        if (!_screensaver && !_wallpaper) {
+            // 优先播放 ota_1 分区里的动态壁纸；没有或打不开就用原来的 DVD 屏保。
+            if (view::WallpaperPlayer::available()) {
+                auto wallpaper = std::make_unique<view::WallpaperPlayer>();
+                if (wallpaper->open()) {
+                    wallpaper->build_screen();
+                    _wallpaper = std::move(wallpaper);
+                }
+            }
+            if (!_wallpaper) {
+                _screensaver = std::make_unique<view::Screensaver>();
+                _screensaver->init();
+            }
         }
-    } else if (_screensaver) {
-        _screensaver.reset();
+    } else {
+        // 触摸会清零空闲时间：任意一碰就退出屏保。
+        stop_screensaver();
     }
 
     // Update in 30ms interval
@@ -96,4 +115,14 @@ void AppLauncher::screensaver_update()
         _screensaver_timecount = GetHAL().millis();
         _screensaver->update();
     }
+}
+
+void AppLauncher::stop_screensaver()
+{
+    // 调用方持有 LVGL 锁：两种屏保的析构都要把原来的屏幕换回来。
+    if (_wallpaper) {
+        _wallpaper->close_screen();
+        _wallpaper.reset();
+    }
+    _screensaver.reset();
 }
