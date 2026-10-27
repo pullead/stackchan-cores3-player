@@ -22,12 +22,11 @@
 #include <mooncake.h>
 #include <smooth_lvgl.hpp>
 
-// Local music player, reproducing the esp32-hifi player's look and behaviour.
+// 本地音乐播放器。
 //
-// The widgets are built with the plain LVGL 9 API rather than the C++ wrapper
-// used elsewhere in this firmware: the upstream layout is specified down to
-// individual pixel offsets, and matching it is easier against the same API
-// shape it was written for.
+// 界面改写自 LVGL 官方音乐播放器 demo（MIT），见 app_local_music_view.cpp：
+// 白色播放页叠在深色曲目列表之上，上滑播放页露出列表。逻辑（曲库、索引、
+// 播放控制、自动切歌）在 app_local_music.cpp，界面构建与刷新在 view 文件里。
 class AppLocalMusic : public mooncake::AppAbility {
 public:
     AppLocalMusic();
@@ -42,10 +41,9 @@ public:
     ~AppLocalMusic() override;
 
 private:
-    // Browse dimensions, mirroring the upstream tab strip.  Songs is backed by
-    // the SD scan today; the others need library metadata that is not collected
-    // yet, and say so rather than showing a silently empty list.
-    enum class Tab : uint8_t { Songs, Artists, Albums, Today, Favourites };
+    // 列表的两个视图：全部曲目与收藏。原先的歌手/专辑/今日三个分类一直只是
+    // 占位提示，换界面时一并去掉。
+    enum class Tab : uint8_t { Songs, Favourites };
 
     // A click handler must not destroy the widget it was invoked from: the
     // closure dies with the button and the rest of the handler would run on
@@ -54,35 +52,30 @@ private:
     enum class PendingAction : uint8_t {
         None,
         SelectTrack,
-        BackToList,
+        ShowList,
+        ShowPlayer,
+        ToggleView,
         SwitchTab,
         PlayPause,
         Prev,
         Next,
-        CyclePlayMode,
+        ToggleShuffle,
+        CycleRepeat,
         ToggleFavourite,
-        ToggleCassette,
         Exit,
         Seek,
     };
 
-    // Cycled by the play-mode button.  The values and their semantics live in
-    // the library module so the finish policy can be host tested.
+    // The values and their semantics live in the library module so the finish
+    // policy can be host tested.
     using PlayMode = media::PlayMode;
 
-    void build_list_page();
-    void build_player_page();
-    void build_status_bar();
-    void build_control_bar();
-    void build_spectrum(lv_obj_t* card);
-    void destroy_page();
+    // —— 逻辑（app_local_music.cpp）——
     void release_resources();
     void filter_visible_tracks();
-    void rebind_rows();
-    void sync_scroll_slider();
-    // Reads one track's tag per call, and only while the list is showing and
-    // nothing is playing: the pump task and this would otherwise borrow the same
-    // SD/display bus, which is not reentrant.
+    // Reads one track's tag per call, and only while nothing is playing: the
+    // pump task and this would otherwise borrow the same SD/display bus, which
+    // is not reentrant.
     void index_one_track_when_idle();
     // The cached title/artist when the track has been indexed, the filename and
     // a placeholder otherwise.
@@ -96,27 +89,40 @@ private:
     void start_track(std::size_t index);
     // Returns false when there is nothing in the view to move to.
     bool step_track(int direction);
-    void refresh_player_page();
-    void refresh_spectrum();
-    void draw_spectrum_cell(int32_t column, int32_t row, bool lit);
-    void update_transport_icons();
-    std::string playback_status() const;
     std::string playback_status(media::PlaybackState state) const;
 
-    static void on_tab_clicked(lv_event_t* event);
+    // —— 界面（app_local_music_view.cpp）——
+    // 以下函数都要求调用方已持有 LVGL 锁。
+    void build_ui();
+    void build_list_panel();
+    void build_player_panel();
+    void destroy_ui();
+    // 视图切换后重排列表：标签样式、计数、内容高度、回到顶部。
+    void reload_list();
+    void rebind_rows(bool force);
+    void show_track_info();
+    void update_controls();
+    void refresh_view();
+    void refresh_spectrum();
+    void scroll_to_list(bool animate);
+    void scroll_to_player(bool animate);
+    bool list_visible() const;
+
     static void on_row_clicked(lv_event_t* event);
-    static void on_back_clicked(lv_event_t* event);
-    static void on_exit_clicked(lv_event_t* event);
-    static void on_scroll_slider(lv_event_t* event);
-    static void on_transport(lv_event_t* event);
-    // Left-edge swipe right goes back, the same gesture upstream uses as its
-    // universal back action.
-    static void on_gesture(lv_event_t* event);
-    static void on_press_start(lv_event_t* event);
     static void on_list_scrolled(lv_event_t* event);
+    // 按钮的 user_data 是要执行的 PendingAction。
+    static void on_action_clicked(lv_event_t* event);
+    static void on_tab_clicked(lv_event_t* event);
     // The progress bar.  A drag is only turned into a seek when the finger
     // lifts, so the value being dragged is never overwritten by the clock.
     static void on_progress_event(lv_event_t* event);
+    static void on_spectrum_draw(lv_event_t* event);
+    // 封面左右滑动切歌，沿用 demo 的交互。
+    static void on_cover_gesture(lv_event_t* event);
+    static void on_main_scroll_end(lv_event_t* event);
+    // 挂在输入设备上而不是某个控件上：按下事件不会从子控件冒泡，左边缘
+    // 手势需要知道手指落在哪里。
+    static void on_indev_event(lv_event_t* event);
 
     media::SdCardPort sd_card_;
     std::unique_ptr<media::BoardAudioCodecPort> codec_port_;
@@ -142,75 +148,85 @@ private:
     uint32_t last_index_tick_ = 0;
 
     // The list keeps a fixed pool of row widgets and rebinds them to whatever
-    // is on screen.  One LVGL object per track only worked while the scanner
-    // capped the library at 64; a real card has hundreds.
-    static constexpr int32_t kRowPool = 8;
+    // is on screen; one LVGL object per track does not scale to a real card.
+    static constexpr int32_t kRowPool = 7;
     std::array<lv_obj_t*, kRowPool> row_pool_{};
+    std::array<lv_obj_t*, kRowPool> row_icon_{};
     std::array<lv_obj_t*, kRowPool> row_title_{};
     std::array<lv_obj_t*, kRowPool> row_artist_{};
     // What each slot shows: a position in visible_, not a track index, because
     // the view can be a subset of the library.
     std::array<std::size_t, kRowPool> row_position_{};
     // The track indices this list is showing: everything for Songs, the
-    // favourites for ★.  Kept while the player page is open so next/prev follow
-    // the view that was in use.
+    // favourites for ★.  Next/prev follow the view that was in use.
     std::vector<std::size_t> visible_;
     int32_t first_row_ = -1;
-    // Guards the slider/scroll feedback loop while one is synced from the other.
-    bool syncing_slider_ = false;
 
-    // One root per page; deleting it takes every child with it.
+    // 控件。根对象删除时整棵树随之释放，其余指针只是引用。
     lv_obj_t* root_ = nullptr;
+    lv_obj_t* list_panel_ = nullptr;
     lv_obj_t* list_ = nullptr;
-    lv_obj_t* scroll_slider_ = nullptr;
-    lv_obj_t* status_label_ = nullptr;
-    lv_obj_t* player_title_ = nullptr;
-    lv_obj_t* player_lyric_ = nullptr;
-    lv_obj_t* player_elapsed_ = nullptr;
-    lv_obj_t* player_total_ = nullptr;
-    lv_obj_t* player_state_ = nullptr;
-    lv_obj_t* progress_ = nullptr;
-    lv_obj_t* spectrum_ = nullptr;
-    lv_color_t* spectrum_buffer_ = nullptr;
-    lv_obj_t* play_icon_ = nullptr;
-    lv_obj_t* mode_icon_ = nullptr;
+    lv_obj_t* list_spacer_ = nullptr;
+    lv_obj_t* list_empty_ = nullptr;
+    lv_obj_t* count_label_ = nullptr;
+    std::array<lv_obj_t*, 2> tab_labels_{};
+    lv_obj_t* main_cont_ = nullptr;
+    lv_obj_t* player_ = nullptr;
+    lv_obj_t* title_label_ = nullptr;
+    lv_obj_t* artist_label_ = nullptr;
+    lv_obj_t* info_label_ = nullptr;
     lv_obj_t* favourite_icon_ = nullptr;
-    lv_obj_t* status_time_ = nullptr;
-    lv_obj_t* status_wifi_ = nullptr;
-    lv_obj_t* status_rate_ = nullptr;
-    lv_obj_t* status_dac_box_ = nullptr;
-    lv_obj_t* status_dac_ = nullptr;
-    lv_obj_t* status_codec_ = nullptr;
-    lv_obj_t* status_volume_ = nullptr;
+    lv_obj_t* format_label_ = nullptr;
+    lv_obj_t* shuffle_icon_ = nullptr;
+    lv_obj_t* play_icon_ = nullptr;
+    lv_obj_t* loop_icon_ = nullptr;
+    lv_obj_t* loop_badge_ = nullptr;
+    lv_obj_t* progress_ = nullptr;
+    lv_obj_t* time_label_ = nullptr;
+    lv_obj_t* spectrum_obj_ = nullptr;
+    lv_obj_t* cover_ = nullptr;
+    lv_obj_t* handle_label_ = nullptr;
+    lv_indev_t* gesture_indev_ = nullptr;
 
     // Spectrum data path: the audio task fills the tap, this page drains it.
     media::PcmTap pcm_tap_;
     media::SpectrumAnalyzer analyzer_;
-    std::array<int32_t, media::SpectrumAnalyzer::kColumns> drawn_rows_{};
+    // demo 的环形频谱只用 4 个频段（低、中低、中、中高），量程约 0..80。
+    std::array<int32_t, 4> bands_{};
+    uint32_t spectrum_frame_ = 0;
+    uint32_t bar_rot_ = 0;
+    uint32_t bar_ofs_ = 0;
+    uint32_t bass_count_ = 0;
+    uint32_t last_bass_frame_ = 0;
+    uint32_t last_spectrum_tick_ = 0;
+    bool spectrum_resting_ = true;
 
     std::size_t current_index_ = 0;
+    bool has_track_ = false;
     PlayMode play_mode_ = PlayMode::Sequential;
-    bool cassette_view_ = false;
     int32_t press_start_x_ = 0;
     float pending_seek_fraction_ = 0.0f;
     // True while a finger is on the progress bar.
     bool seeking_ = false;
 
     Tab tab_ = Tab::Songs;
-    bool player_page_ = false;
     PendingAction pending_action_ = PendingAction::None;
     std::size_t pending_index_ = 0;
     Tab pending_tab_ = Tab::Songs;
     std::string selected_title_;
-    // Favourite state of the selected track, kept so the star can be redrawn
+    // Favourite state of the selected track, kept so the heart can be redrawn
     // without a lookup, and the NVS-backed store it comes from.
     media::LibraryStore store_;
     bool current_favourite_ = false;
-    // Filled from the track's own tag when it is opened.  The list keeps
-    // filenames: reading a tag per row would put file I/O on the scroll path.
+    // Filled from the track's own tag when it is opened.
     std::string selected_artist_;
     uint32_t total_seconds_ = 0;
-    std::string shown_total_;
-    std::string shown_status_;
-    std::string shown_elapsed_;
+    // 已绘制的状态，未变化时跳过 LVGL 调用。
+    std::string shown_info_;
+    std::string shown_time_;
+    std::string shown_format_;
+    media::PlaybackState shown_state_ = media::PlaybackState::Idle;
+    bool shown_list_visible_ = true;
+    std::size_t shown_highlight_ = SIZE_MAX;
+    bool shown_highlight_playing_ = false;
 };
