@@ -123,7 +123,10 @@ private:
     // LVGL 锁内换上。计算在调用线程进行，不持有 LVGL 锁。
     void load_cover(const uint8_t* jpeg, std::size_t length);
 
+    // 行按下时记录防误触的基准，点击时据此判断这是不是一次滑动。
+    static void on_row_pressed(lv_event_t* event);
     static void on_row_clicked(lv_event_t* event);
+    bool row_click_was_scroll() const;
     static void on_list_scrolled(lv_event_t* event);
     // 按钮的 user_data 是要执行的 PendingAction。
     static void on_action_clicked(lv_event_t* event);
@@ -176,6 +179,11 @@ private:
     // favourites for ★.  Next/prev follow the view that was in use.
     std::vector<std::size_t> visible_;
     int32_t first_row_ = -1;
+    // 滑动误触保护（判据沿用上游 esp32-hifi，见 row_click_was_scroll()）。
+    int32_t press_scroll_y_ = 0;
+    lv_point_t press_point_{};
+    uint32_t last_list_scroll_ms_ = 0;
+    bool press_stopped_scroll_ = false;
 
     // 控件。根对象删除时整棵树随之释放，其余指针只是引用。
     lv_obj_t* root_ = nullptr;

@@ -67,6 +67,11 @@ constexpr int32_t kLeftColumnWidth = 172;
 constexpr int32_t kTextWidth = 150;
 // 左边缘右滑：起点必须在这个宽度以内，再往里的滑动属于手指下面的控件。
 constexpr int32_t kEdgeGestureWidth = 40;
+// 列表防误触：按下前这么久内列表还在滚，就当作点停滑行。300 ms 覆盖滑行
+// 减速的尾段，又不会误伤停稳之后重新点一首（数值沿用上游）。
+constexpr uint32_t kStopTapWindowMs = 300;
+// 手指位移超过这么多就不算点击；略高于 LVGL 的 scroll_limit，留出抖动余量。
+constexpr int32_t kTapTravelPx = 8;
 
 // 环形频谱。demo 的封面 176px、静止半径 82；这里封面 108px，按同一比例。
 constexpr int32_t kSpectrumSize = 156;
@@ -321,6 +326,7 @@ void AppLocalMusic::build_list_panel() {
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_CHECKED);
         lv_obj_set_user_data(row, this);
         // 回调不带下标：行是对象池里的槽位，显示什么随滚动而变。
+        lv_obj_add_event_cb(row, on_row_pressed, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED, nullptr);
 
         lv_obj_t* icon = lv_image_create(row);
@@ -1108,10 +1114,45 @@ void AppLocalMusic::on_spectrum_draw(lv_event_t* event) {
     }
 }
 
+void AppLocalMusic::on_row_pressed(lv_event_t* event) {
+    auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
+    auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
+    if (self == nullptr || self->list_ == nullptr) return;
+    self->press_scroll_y_ = lv_obj_get_scroll_y(self->list_);
+    self->press_point_ = {};
+    if (lv_indev_t* indev = lv_indev_active(); indev != nullptr) {
+        lv_indev_get_point(indev, &self->press_point_);
+    }
+    // 按下前不久列表还在滚：这一下是点停惯性滑动，不是选歌。按下与松手时
+    // 的滚动位置此时几乎相同，只靠第一条判据挡不住。
+    self->press_stopped_scroll_ =
+        lv_tick_elaps(self->last_list_scroll_ms_) < kStopTapWindowMs;
+}
+
+bool AppLocalMusic::row_click_was_scroll() const {
+    // LVGL 判定「点击」只看按下到松手的位移是否小于 scroll_limit，滑动中途
+    // 一次短暂停顿再抬手就满足。三条判据（沿用上游 esp32-hifi）：
+    // 1. 手指实际移动了多少：覆盖拖到列表顶/底（手指在动但列表不滚）和横向
+    //    拖动（不产生竖直滚动）两种情况；
+    if (lv_indev_t* indev = lv_indev_active(); indev != nullptr) {
+        lv_point_t point{};
+        lv_indev_get_point(indev, &point);
+        const int32_t dx = point.x - press_point_.x;
+        const int32_t dy = point.y - press_point_.y;
+        if (dx * dx + dy * dy > kTapTravelPx * kTapTravelPx) return true;
+    }
+    // 2. 这一下是不是在点停惯性滑动；
+    if (press_stopped_scroll_) return true;
+    // 3. 按下到松手之间列表实际滚过没有（2 px 容差给手指抖动）。
+    const int32_t moved = lv_obj_get_scroll_y(list_) - press_scroll_y_;
+    return moved > 2 || moved < -2;
+}
+
 void AppLocalMusic::on_row_clicked(lv_event_t* event) {
     auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
     auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
-    if (self == nullptr) return;
+    if (self == nullptr || self->list_ == nullptr) return;
+    if (self->row_click_was_scroll()) return;  // 这是一次滑动，不是点击
     // The row is a pool slot, so the track it stands for is whatever the last
     // rebind put there: a position in the current view, not a track index.
     for (int32_t slot = 0; slot < kRowPool; ++slot) {
@@ -1129,6 +1170,8 @@ void AppLocalMusic::on_list_scrolled(lv_event_t* event) {
     auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(event));
     auto* self = static_cast<AppLocalMusic*>(lv_obj_get_user_data(target));
     if (self == nullptr) return;
+    // 记下最后一次滚动的时刻，供「点停滑行」判据使用。
+    self->last_list_scroll_ms_ = lv_tick_get();
     self->rebind_rows(false);
 }
 
