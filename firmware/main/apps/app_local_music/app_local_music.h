@@ -197,7 +197,9 @@ private:
     lv_obj_t* loop_icon_ = nullptr;
     lv_obj_t* loop_badge_ = nullptr;
     lv_obj_t* progress_ = nullptr;
+    // 进度条两端：已播放与总时长。
     lv_obj_t* time_label_ = nullptr;
+    lv_obj_t* total_label_ = nullptr;
     lv_obj_t* spectrum_obj_ = nullptr;
     lv_obj_t* cover_ = nullptr;
     lv_obj_t* handle_label_ = nullptr;

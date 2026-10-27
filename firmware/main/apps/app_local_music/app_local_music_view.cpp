@@ -98,7 +98,11 @@ constexpr uint32_t kFavourite = 0xe0457b;
 constexpr uint32_t kSliderStart = 0x569af8;
 constexpr uint32_t kSliderEnd = 0xa666f1;
 // 圆形封面外圈白边的宽度（像素）。
-constexpr int kCoverRingWidth = 2;
+constexpr int kCoverRingWidth = 1;
+// 通栏进度条：行高、轨道粗细，以及两端时间标签的宽度（够放 "88:88"）。
+constexpr int32_t kProgressRowHeight = 30;
+constexpr int32_t kProgressTrackHeight = 6;
+constexpr int32_t kClockLabelWidth = 36;
 
 lv_color_t to_lv(const media::Rgb& colour) { return lv_color_make(colour.r, colour.g, colour.b); }
 
@@ -234,6 +238,7 @@ void AppLocalMusic::destroy_ui() {
     loop_badge_ = nullptr;
     progress_ = nullptr;
     time_label_ = nullptr;
+    total_label_ = nullptr;
     spectrum_obj_ = nullptr;
     cover_ = nullptr;
     handle_label_ = nullptr;
@@ -392,13 +397,35 @@ void AppLocalMusic::build_player_panel() {
         lv_obj_add_flag(background_, LV_OBJ_FLAG_IGNORE_LAYOUT);
     }
 
-    // demo 横屏版的两栏：左栏文字与控制，右栏封面与环形频谱；最后一行是
-    // 停在列表上时露出的那条。
+    // 上部是 demo 横屏版的两栏：左栏文字、小图标与播放键，右栏封面与环形
+    // 频谱。下面两行通栏：横贯全宽的进度条，以及停在列表上时露出的那条。
+    //   行 0 顶部留白   行 1 标题区   行 3 小图标行   行 5 播放键行
+    //   行 7 进度条     行 8 底部把手（2、4、6 是弹性间距）
     static const int32_t kColumns[] = {kLeftColumnWidth, LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
-    static const int32_t kRows[] = {28,            LV_GRID_CONTENT, LV_GRID_FR(1),
-                                    LV_GRID_CONTENT, LV_GRID_FR(1),   LV_GRID_CONTENT,
-                                    LV_GRID_FR(1), kStripHeight,    LV_GRID_TEMPLATE_LAST};
+    static const int32_t kRows[] = {14,
+                                    LV_GRID_CONTENT,
+                                    LV_GRID_FR(1),
+                                    LV_GRID_CONTENT,
+                                    LV_GRID_FR(1),
+                                    LV_GRID_CONTENT,
+                                    LV_GRID_FR(1),
+                                    kProgressRowHeight,
+                                    kStripHeight,
+                                    LV_GRID_TEMPLATE_LAST};
     lv_obj_set_grid_dsc_array(player_, kColumns, kRows);
+
+    // 可点击的图片按钮；触摸范围比图片本身再向外扩一圈，小屏上更好按。
+    auto make_button = [this](lv_obj_t* parent, const lv_image_dsc_t* src, PendingAction action,
+                              int32_t extra_touch) {
+        lv_obj_t* image = lv_image_create(parent);
+        lv_image_set_src(image, src);
+        lv_obj_add_flag(image, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ext_click_area(image, extra_touch);
+        lv_obj_set_user_data(image, this);
+        lv_obj_add_event_cb(image, on_action_clicked, LV_EVENT_CLICKED,
+                            reinterpret_cast<void*>(static_cast<uintptr_t>(action)));
+        return image;
+    };
 
     // 标题区。
     lv_obj_t* title_box = make_box(player_);
@@ -416,66 +443,76 @@ void AppLocalMusic::build_player_panel() {
     pin_single_line(info_label_, kTextWidth);
     lv_obj_set_grid_cell(title_box, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_CENTER, 1, 1);
 
-    // 图标区：demo 这里是四个装饰图标，换成收藏与格式信息。
+    // 小图标行：收藏、随机、循环与格式信息。随机和循环从播放键行挪到这里，
+    // 播放键行才放得下更大的按钮（左栏只有 172 px，右边是频谱）。
     lv_obj_t* icon_box = make_box(player_);
     lv_obj_set_height(icon_box, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(icon_box, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(icon_box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_left(icon_box, 14, 0);
-    lv_obj_set_style_pad_column(icon_box, 10, 0);
-    favourite_icon_ = lv_image_create(icon_box);
-    lv_image_set_src(favourite_icon_, &lm_icn_heart);
-    lv_obj_add_flag(favourite_icon_, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(favourite_icon_, 10);
-    lv_obj_set_user_data(favourite_icon_, this);
-    lv_obj_add_event_cb(favourite_icon_, on_action_clicked, LV_EVENT_CLICKED,
-                        reinterpret_cast<void*>(static_cast<uintptr_t>(PendingAction::ToggleFavourite)));
+    lv_obj_set_style_pad_column(icon_box, 16, 0);
+    favourite_icon_ = make_button(icon_box, &lm_icn_heart, PendingAction::ToggleFavourite, 8);
+    shuffle_icon_ = make_button(icon_box, &lm_btn_rnd, PendingAction::ToggleShuffle, 8);
+    // 循环键套一层容器，好在右上角挂单曲循环的「1」角标。
+    lv_obj_t* loop_box = make_box(icon_box);
+    lv_obj_set_size(loop_box, lm_btn_loop.header.w, lm_btn_loop.header.h);
+    lv_obj_add_flag(loop_box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(loop_box, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_set_ext_click_area(loop_box, 8);
+    lv_obj_set_user_data(loop_box, this);
+    lv_obj_add_event_cb(loop_box, on_action_clicked, LV_EVENT_CLICKED,
+                        reinterpret_cast<void*>(static_cast<uintptr_t>(PendingAction::CycleRepeat)));
+    loop_icon_ = lv_image_create(loop_box);
+    lv_image_set_src(loop_icon_, &lm_btn_loop);
+    lv_obj_center(loop_icon_);
+    loop_badge_ = make_label(loop_box, &lv_font_montserrat_10, kInkMid, "1");
+    lv_obj_align(loop_badge_, LV_ALIGN_TOP_RIGHT, 6, -6);
+    lv_obj_add_flag(loop_badge_, LV_OBJ_FLAG_HIDDEN);
     format_label_ = make_label(icon_box, &lv_font_montserrat_12, kInkMid, "");
     lv_obj_set_grid_cell(icon_box, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_CENTER, 3, 1);
 
-    // 控制区：随机、上一首、播放、下一首、循环，下一行进度条与时间。
+    // 播放键行：上一首、播放、下一首，在左栏里均匀分布。
     lv_obj_t* ctrl_box = make_box(player_);
     lv_obj_set_height(ctrl_box, LV_SIZE_CONTENT);
     lv_obj_remove_flag(ctrl_box, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
-    static const int32_t kCtrlColumns[] = {LV_GRID_FR(1), 22, 38, 48, 38, 22, LV_GRID_FR(1),
-                                           LV_GRID_TEMPLATE_LAST};
-    static const int32_t kCtrlRows[] = {LV_GRID_CONTENT, 26, LV_GRID_TEMPLATE_LAST};
-    lv_obj_set_grid_dsc_array(ctrl_box, kCtrlColumns, kCtrlRows);
+    lv_obj_set_flex_flow(ctrl_box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ctrl_box, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    prev_icon_ = make_button(ctrl_box, &lm_btn_prev, PendingAction::Prev, 8);
+    play_icon_ = make_button(ctrl_box, &lm_btn_play, PendingAction::PlayPause, 8);
+    next_icon_ = make_button(ctrl_box, &lm_btn_next, PendingAction::Next, 8);
+    lv_obj_set_grid_cell(ctrl_box, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_CENTER, 5, 1);
 
-    auto make_button = [this, ctrl_box](const lv_image_dsc_t* src, PendingAction action,
-                                        int32_t column) {
-        lv_obj_t* image = lv_image_create(ctrl_box);
-        lv_image_set_src(image, src);
-        lv_obj_add_flag(image, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(image, 6);
-        lv_obj_set_user_data(image, this);
-        lv_obj_add_event_cb(image, on_action_clicked, LV_EVENT_CLICKED,
-                            reinterpret_cast<void*>(static_cast<uintptr_t>(action)));
-        lv_obj_set_grid_cell(image, LV_GRID_ALIGN_CENTER, column, 1, LV_GRID_ALIGN_CENTER, 0, 1);
-        return image;
-    };
-    shuffle_icon_ = make_button(&lm_btn_rnd, PendingAction::ToggleShuffle, 1);
-    prev_icon_ = make_button(&lm_btn_prev, PendingAction::Prev, 2);
-    play_icon_ = make_button(&lm_btn_play, PendingAction::PlayPause, 3);
-    next_icon_ = make_button(&lm_btn_next, PendingAction::Next, 4);
-    loop_icon_ = make_button(&lm_btn_loop, PendingAction::CycleRepeat, 5);
-    // 单曲循环在循环键右上角标一个「1」。
-    loop_badge_ = make_label(ctrl_box, &lv_font_montserrat_10, kInkMid, "1");
-    lv_obj_set_grid_cell(loop_badge_, LV_GRID_ALIGN_END, 5, 1, LV_GRID_ALIGN_START, 0, 1);
-    lv_obj_add_flag(loop_badge_, LV_OBJ_FLAG_HIDDEN);
+    // 进度条行：横贯全宽，左边已播放、右边总时长，位置在频谱下方。
+    lv_obj_t* progress_box = make_box(player_);
+    lv_obj_set_flex_flow(progress_box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(progress_box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(progress_box, 14, 0);
+    lv_obj_set_style_pad_column(progress_box, 10, 0);
+    // 拖钮会伸出轨道上下；容器不裁剪，免得拖钮被切掉一半。
+    lv_obj_add_flag(progress_box, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
-    progress_ = lv_slider_create(ctrl_box);
+    time_label_ = make_label(progress_box, &lv_font_montserrat_12, kInkMid, "0:00");
+    lv_obj_set_width(time_label_, kClockLabelWidth);
+
+    progress_ = lv_slider_create(progress_box);
     lv_slider_set_range(progress_, 0, 1000);
-    lv_obj_set_height(progress_, 3);
+    lv_obj_set_height(progress_, kProgressTrackHeight);
+    lv_obj_set_flex_grow(progress_, 1);
     lv_obj_set_style_anim_duration(progress_, 100, 0);
     lv_obj_remove_flag(progress_, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
-    lv_obj_set_ext_click_area(progress_, 10);
-    // demo 原样的进度条：浅色细轨道、蓝紫渐变进度、图片拖钮。
+    // 轨道只有几像素高，手指却有一厘米宽：上下各扩出一大截触摸范围。
+    lv_obj_set_ext_click_area(progress_, 12);
+    // demo 原样的配色：浅色轨道、蓝紫渐变进度、图片拖钮；轨道加粗、两端圆角。
     lv_obj_set_style_bg_color(progress_, lv_color_hex(0xe4e1f3), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(progress_, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
     lv_obj_set_style_bg_image_src(progress_, &lm_slider_knob, LV_PART_KNOB);
     lv_obj_set_style_bg_opa(progress_, LV_OPA_TRANSP, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(progress_, 12, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(progress_, (lm_slider_knob.header.h - kProgressTrackHeight) / 2,
+                             LV_PART_KNOB);
     lv_obj_set_style_shadow_width(progress_, 0, LV_PART_KNOB);
     lv_obj_set_style_bg_grad_dir(progress_, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(progress_, lv_color_hex(kSliderStart), LV_PART_INDICATOR);
@@ -484,11 +521,11 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_user_data(progress_, this);
     lv_obj_add_event_cb(progress_, on_progress_event, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(progress_, on_progress_event, LV_EVENT_RELEASED, nullptr);
-    lv_obj_set_grid_cell(progress_, LV_GRID_ALIGN_STRETCH, 1, 3, LV_GRID_ALIGN_CENTER, 1, 1);
 
-    time_label_ = make_label(ctrl_box, &lv_font_montserrat_12, kInkMid, "0:00");
-    lv_obj_set_grid_cell(time_label_, LV_GRID_ALIGN_END, 4, 2, LV_GRID_ALIGN_CENTER, 1, 1);
-    lv_obj_set_grid_cell(ctrl_box, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_CENTER, 5, 1);
+    total_label_ = make_label(progress_box, &lv_font_montserrat_12, kInkMid, "--:--");
+    lv_obj_set_width(total_label_, kClockLabelWidth);
+    lv_obj_set_style_text_align(total_label_, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_grid_cell(progress_box, LV_GRID_ALIGN_STRETCH, 0, 2, LV_GRID_ALIGN_STRETCH, 7, 1);
 
     // 底部把手：点一下在播放页与列表之间切换。
     lv_obj_t* handle_box = make_box(player_);
@@ -506,7 +543,7 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_size(handle_bar, 20, 2);
     lv_obj_set_style_bg_color(handle_bar, lv_color_hex(kInkMid), 0);
     lv_obj_set_style_bg_opa(handle_bar, LV_OPA_COVER, 0);
-    lv_obj_set_grid_cell(handle_box, LV_GRID_ALIGN_STRETCH, 0, 2, LV_GRID_ALIGN_STRETCH, 7, 1);
+    lv_obj_set_grid_cell(handle_box, LV_GRID_ALIGN_STRETCH, 0, 2, LV_GRID_ALIGN_STRETCH, 8, 1);
 
     // 环形频谱与封面。最后创建，画在其他控件之上，与 demo 一致。
     spectrum_obj_ = make_box(player_);
@@ -666,6 +703,7 @@ void AppLocalMusic::apply_theme() {
     lv_obj_set_style_text_color(info_label_, faint, 0);
     lv_obj_set_style_text_color(format_label_, faint, 0);
     lv_obj_set_style_text_color(time_label_, soft, 0);
+    lv_obj_set_style_text_color(total_label_, soft, 0);
     lv_obj_set_style_text_color(handle_label_, soft, 0);
     lv_obj_set_style_text_color(loop_badge_, accent, 0);
     lv_obj_t* handle_bar = lv_obj_get_child(lv_obj_get_parent(handle_label_), 1);
@@ -827,17 +865,18 @@ void AppLocalMusic::refresh_view() {
 
     const uint32_t elapsed =
         tick.sample_rate > 0 ? static_cast<uint32_t>(tick.played_frames / tick.sample_rate) : 0;
-    char clock[32] = {};
-    char total[16] = {};
+    char clock[16] = {};
+    char total[16] = "--:--";
     format_clock(clock, sizeof(clock), has_track_ ? elapsed : 0);
     if (total_seconds_ > 0) {
         format_clock(total, sizeof(total), total_seconds_);
-        std::strncat(clock, " / ", sizeof(clock) - std::strlen(clock) - 1);
-        std::strncat(clock, total, sizeof(clock) - std::strlen(clock) - 1);
     }
-    if (shown_time_ != clock) {
-        shown_time_ = clock;
+    // 两个标签合成一个键比较，任一变化才刷新。
+    const std::string time_key = std::string(clock) + "|" + total;
+    if (shown_time_ != time_key) {
+        shown_time_ = time_key;
         lv_label_set_text(time_label_, clock);
+        lv_label_set_text(total_label_, total);
         if (!seeking_) {
             // Driven by the same tick as the clock, so the bar and the label
             // cannot disagree; left alone while a finger is on it.

@@ -27,15 +27,15 @@ CONVERTER = os.path.join(LVGL, "scripts", "LVGLImage.py")
 # (源文件, 输出名, 目标宽, 目标高, 颜色格式)
 # 不带透明通道的图（封面、波浪）用 RGB565：体积减半，绘制时也不必做 alpha 混合。
 ASSETS = [
-    ("btn_play.png", "lm_btn_play", 44, 43, "ARGB8888"),
-    ("btn_pause.png", "lm_btn_pause", 44, 43, "ARGB8888"),
-    ("btn_prev.png", "lm_btn_prev", 34, 34, "ARGB8888"),
-    ("btn_next.png", "lm_btn_next", 34, 34, "ARGB8888"),
-    ("btn_rnd.png", "lm_btn_rnd", 18, 18, "ARGB8888"),
-    ("btn_loop.png", "lm_btn_loop", 18, 18, "ARGB8888"),
+    ("btn_play.png", "lm_btn_play", 54, 53, "ARGB8888"),
+    ("btn_pause.png", "lm_btn_pause", 54, 53, "ARGB8888"),
+    ("btn_prev.png", "lm_btn_prev", 42, 42, "ARGB8888"),
+    ("btn_next.png", "lm_btn_next", 42, 42, "ARGB8888"),
+    ("btn_rnd.png", "lm_btn_rnd", 22, 22, "ARGB8888"),
+    ("btn_loop.png", "lm_btn_loop", 22, 22, "ARGB8888"),
     ("btn_list_play.png", "lm_btn_list_play", 32, 33, "ARGB8888"),
     ("btn_list_pause.png", "lm_btn_list_pause", 32, 33, "ARGB8888"),
-    ("icn_heart.png", "lm_icn_heart", 20, 20, "ARGB8888"),
+    ("icn_heart.png", "lm_icn_heart", 22, 22, "ARGB8888"),
     ("icn_slider.png", "lm_slider_knob", 26, 27, "ARGB8888"),
     ("list_border.png", "lm_list_border", 272, 4, "ARGB8888"),
     ("cover_1.png", "lm_cover_default", 108, 107, "RGB565"),
