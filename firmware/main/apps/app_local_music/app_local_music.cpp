@@ -8,6 +8,7 @@
 #include <media/audio/volume_policy.h>
 #include <media/decoder/hifi_decoder_adapter.h>
 #include <media/library/audio_format.h>
+#include <media/library/cover_art.h>
 #include <media/library/library_store.h>
 #include <media/library/mp3_info.h>
 #include <mooncake_log.h>
@@ -24,6 +25,12 @@ namespace {
 // bytes to over a hundred kilobytes; this covers the common case, including the
 // first MPEG frame, without reading a whole cover art frame off the card.
 constexpr std::size_t kMetadataProbeBytes = 16384;
+
+// 开播时为了取封面最多读这么多标签。内嵌封面通常几十到几百 KB；更大的
+// 不读，免得一首歌开头卡住太久，此时用默认封面。
+constexpr std::size_t kMaxCoverTagBytes = 512 * 1024;
+// 标签之后再多读一点，把第一个 MPEG 帧和 Xing 头也带进来，用于算时长。
+constexpr std::size_t kFrameProbeBytes = 4096;
 
 // One file per interval while nothing plays.  A head read borrows the display
 // bus for a while, so spreading the library out is what keeps the list
@@ -50,6 +57,18 @@ bool ends_with(const std::string& text, const char* suffix) {
         if (character != suffix[i]) return false;
     }
     return true;
+}
+
+// 一次 read() 不保证填满：循环到读满、到文件尾或出错为止。
+std::size_t read_up_to(media::AudioStream& stream, uint8_t* destination, std::size_t capacity) {
+    std::size_t total = 0;
+    while (total < capacity) {
+        std::size_t got = 0;
+        const media::AudioStreamStatus status = stream.read(destination + total, capacity - total, got);
+        total += got;
+        if (status != media::AudioStreamStatus::Ok || got == 0) break;
+    }
+    return total;
 }
 
 }  // namespace
@@ -100,9 +119,19 @@ void AppLocalMusic::onOpen() {
         mclog::tagError(getAppInfo().name, "audio codec unavailable");
     }
 
+    // 封面缓冲区与默认封面的配色先准备好，界面一建起来就是毛玻璃背景。
+    if (allocate_cover_buffers()) {
+        prepare_default_cover();
+        load_cover(nullptr, 0);
+    }
+
     // browse_tracks() owns the display/SD handoff and therefore runs without an
     // application-level LVGL lock.  It also unmounts before returning.
     tracks_ = sd_card_.browse_tracks();
+    // 应用打开期间常驻挂载：索引器和播放器打开文件只做引用计数。
+    if (!sd_card_.retain_mount()) {
+        mclog::tagWarn(getAppInfo().name, "SD card could not stay mounted: {}", sd_card_.last_error());
+    }
 
     // Nothing is indexed yet: every row falls back to its filename until the
     // indexer has read that file.
@@ -152,11 +181,15 @@ void AppLocalMusic::release_resources() {
         playback_->stop();
     }
     GetHAL().setSpeakerVolume(media::kMutedVolumePercent, false);
+    // 文件流都已关闭，交还常驻挂载。借总线要拿 LVGL 锁，所以在锁外进行。
+    sd_card_.release_mount();
 
     {
         LvglLockGuard lock;
         destroy_ui();
     }
+    // 图像描述符引用这些缓冲区，界面删掉之后才能释放。
+    free_cover_buffers();
     tracks_.clear();
     metadata_.clear();
     indexed_.clear();
@@ -529,28 +562,34 @@ void AppLocalMusic::start_track(std::size_t index) {
     // Read the tag before the decoder takes the stream, then put the read head
     // back: the decoder starts at byte zero and skips the tag itself.  This is
     // one bounded read on the app task, not per row on the scroll path.
+    // 带封面的标签往往远超 16 KB，这时把整个标签读进来（有上限），封面和
+    // 标签后第一个 MPEG 帧都在里面。
+    std::vector<uint8_t> head(kMetadataProbeBytes);
+    head.resize(read_up_to(*stream, head.data(), head.size()));
+    const std::size_t tag_size = media::id3v2_tag_size(head.data(), head.size());
+    if (tag_size > head.size() && tag_size <= kMaxCoverTagBytes) {
+        const std::size_t before = head.size();
+        head.resize(tag_size + kFrameProbeBytes);
+        head.resize(before + read_up_to(*stream, head.data() + before, head.size() - before));
+    }
     {
-        std::vector<uint8_t> head(kMetadataProbeBytes);
-        std::size_t got = 0;
-        const auto read_status = stream->read(head.data(), head.size(), got);
-        if (read_status != media::AudioStreamStatus::Closed &&
-            read_status != media::AudioStreamStatus::InvalidArgument) {
-            media::Mp3Tags tags;
-            std::size_t tag_bytes = 0;
-            if (media::parse_id3v2_tags(head.data(), got, tags, tag_bytes)) {
-                // The filename stays the title when the tag has none.
-                if (!tags.title.empty()) selected_title_ = tags.title;
-                selected_artist_ = tags.artist;
-            }
-            if (ends_with(tracks_[index].path, ".mp3")) {
-                media::Mp3AudioInfo info;
-                if (media::parse_mp3_audio_info(head.data(), got, tag_bytes, stream->size(), info)) {
-                    total_seconds_ = info.duration_seconds;
-                }
+        media::Mp3Tags tags;
+        std::size_t tag_bytes = 0;
+        if (media::parse_id3v2_tags(head.data(), head.size(), tags, tag_bytes)) {
+            // The filename stays the title when the tag has none.
+            if (!tags.title.empty()) selected_title_ = tags.title;
+            selected_artist_ = tags.artist;
+        }
+        if (ends_with(tracks_[index].path, ".mp3")) {
+            media::Mp3AudioInfo info;
+            if (media::parse_mp3_audio_info(head.data(), head.size(), tag_bytes, stream->size(), info)) {
+                total_seconds_ = info.duration_seconds;
             }
         }
-        stream->seek(0);
     }
+    media::EmbeddedPicture picture;
+    const bool has_picture = media::find_id3v2_picture(head.data(), head.size(), picture);
+    stream->seek(0);
 
     current_favourite_ = store_.is_favourite(media::make_track_id(tracks_[index].path));
 
@@ -558,6 +597,13 @@ void AppLocalMusic::start_track(std::size_t index) {
     playback_->select(selected_title_, std::move(stream), std::move(decoder));
     playback_->set_pcm_tap(&pcm_tap_);
     playback_->start();
+
+    // 先出声再解码封面：标签已经在内存里，解码只占 CPU，不会再借 SD 总线。
+    if (has_picture) {
+        load_cover(head.data() + picture.offset, picture.length);
+    } else {
+        load_cover(nullptr, 0);
+    }
 
     LvglLockGuard lock;
     show_track_info();

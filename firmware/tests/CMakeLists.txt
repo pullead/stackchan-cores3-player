@@ -4,6 +4,12 @@ project(stackchan_firmware_tests LANGUAGES CXX)
 
 enable_testing()
 
+# 源码是 UTF-8（含中文注释）。MSVC 默认按系统代码页读取，在日文系统上会把
+# 注释读坏并连带吞掉后面的代码；GCC 默认就是 UTF-8。
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 add_executable(motion_math_test
     motion_math_test.cpp
     ../main/stackchan/motion/motion_math.cpp
@@ -276,6 +282,15 @@ add_executable(mp3_info_test
 target_include_directories(mp3_info_test PRIVATE ../main)
 target_compile_features(mp3_info_test PRIVATE cxx_std_17)
 add_test(NAME mp3_info_test COMMAND $<TARGET_FILE:mp3_info_test>)
+
+add_executable(cover_art_test
+    cover_art_test.cpp
+    ../main/media/library/cover_art.cpp
+    host_stubs/no_abort_dialog.cpp
+)
+target_include_directories(cover_art_test PRIVATE ../main)
+target_compile_features(cover_art_test PRIVATE cxx_std_17)
+add_test(NAME cover_art_test COMMAND $<TARGET_FILE:cover_art_test>)
 
 add_executable(library_store_test
     library_store_test.cpp

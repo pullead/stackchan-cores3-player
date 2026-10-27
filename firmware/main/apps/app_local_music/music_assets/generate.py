@@ -36,13 +36,8 @@ ASSETS = [
     ("btn_list_play.png", "lm_btn_list_play", 32, 33, "ARGB8888"),
     ("btn_list_pause.png", "lm_btn_list_pause", 32, 33, "ARGB8888"),
     ("icn_heart.png", "lm_icn_heart", 20, 20, "ARGB8888"),
-    ("icn_slider.png", "lm_slider_knob", 26, 27, "ARGB8888"),
-    ("corner_1.png", "lm_corner_left", 14, 14, "ARGB8888"),
-    ("corner_2.png", "lm_corner_right", 14, 14, "ARGB8888"),
     ("list_border.png", "lm_list_border", 272, 4, "ARGB8888"),
     ("cover_1.png", "lm_cover_default", 108, 107, "RGB565"),
-    ("wave_top.png", "lm_wave_top", 204, 32, "RGB565"),
-    ("wave_bottom.png", "lm_wave_bottom", 204, 32, "RGB565"),
 ]
 
 

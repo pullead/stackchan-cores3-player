@@ -19,15 +19,22 @@
 // - 全局变量改为 AppLocalMusic 成员，事件只记录待执行动作；
 // - 环形频谱改用实时 FFT（SpectrumAnalyzer），不再播放预录的频谱表；
 // - 曲目列表改为固定对象池 + 按滚动位置重绑，1000 首也只有 7 行控件；
-// - 去掉片头动画；中文用固件自带的 font_puhui_14_1。
+// - 去掉片头动画；中文用固件自带的 font_puhui_14_1；
+// - 白底与波浪装饰换成按专辑封面生成的毛玻璃背景，配色随封面切换，封面
+//   裁成圆形放在频谱中央。
 
 #include "app_local_music.h"
 
 #include <hal/hal.h>
+#include <media/library/cover_decoder.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+
+#ifdef ESP_PLATFORM
+#include <esp_heap_caps.h>
+#endif
 
 LV_FONT_DECLARE(font_puhui_14_1);
 
@@ -41,13 +48,8 @@ LV_IMAGE_DECLARE(lm_btn_loop);
 LV_IMAGE_DECLARE(lm_btn_list_play);
 LV_IMAGE_DECLARE(lm_btn_list_pause);
 LV_IMAGE_DECLARE(lm_icn_heart);
-LV_IMAGE_DECLARE(lm_slider_knob);
-LV_IMAGE_DECLARE(lm_corner_left);
-LV_IMAGE_DECLARE(lm_corner_right);
 LV_IMAGE_DECLARE(lm_list_border);
 LV_IMAGE_DECLARE(lm_cover_default);
-LV_IMAGE_DECLARE(lm_wave_top);
-LV_IMAGE_DECLARE(lm_wave_bottom);
 }
 
 namespace {
@@ -83,21 +85,16 @@ constexpr int32_t kCoverBoost = 24;
 // 约 30 帧/秒，与 demo 频谱表的 33 帧/秒相当。
 constexpr uint32_t kSpectrumIntervalMs = 33;
 
-// demo 的配色。
+// 列表沿用 demo 的深色配色；播放页的颜色由封面决定（apply_theme）。
 constexpr uint32_t kPlayerBg = 0xffffff;
-constexpr uint32_t kInkDark = 0x504d6d;
 constexpr uint32_t kInkMid = 0x8a86b8;
-constexpr uint32_t kInkLight = 0xb5b2d4;
 constexpr uint32_t kListBg = 0x343247;
 constexpr uint32_t kListPressed = 0x4c4965;
 constexpr uint32_t kListTitle = 0xffffff;
 constexpr uint32_t kListArtist = 0xb1b0be;
-constexpr uint32_t kBarColour1 = 0xe9dbfc;
-constexpr uint32_t kBarColour2 = 0x6f8af6;
-constexpr uint32_t kBarColour3 = 0xffffff;
-constexpr uint32_t kSliderStart = 0x569af8;
-constexpr uint32_t kSliderEnd = 0xa666f1;
 constexpr uint32_t kFavourite = 0xe0457b;
+
+lv_color_t to_lv(const media::Rgb& colour) { return lv_color_make(colour.r, colour.g, colour.b); }
 
 constexpr uint16_t kRnd[30] = {994, 285, 553, 11,  792, 707, 966, 641, 852, 827,
                                44,  352, 146, 581, 490, 80,  729, 58,  695, 940,
@@ -193,6 +190,7 @@ void AppLocalMusic::build_ui() {
     shown_state_ = media::PlaybackState::Idle;
     shown_list_visible_ = !list_visible();
     spectrum_resting_ = false;
+    apply_theme();
     show_track_info();
     update_controls();
     reload_list();
@@ -221,7 +219,10 @@ void AppLocalMusic::destroy_ui() {
     info_label_ = nullptr;
     favourite_icon_ = nullptr;
     format_label_ = nullptr;
+    background_ = nullptr;
     shuffle_icon_ = nullptr;
+    prev_icon_ = nullptr;
+    next_icon_ = nullptr;
     play_icon_ = nullptr;
     loop_icon_ = nullptr;
     loop_badge_ = nullptr;
@@ -360,7 +361,8 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_pos(player_, 0, 0);
     lv_obj_set_size(player_, kScreenWidth, kScreenHeight);
     lv_obj_set_style_bg_color(player_, lv_color_hex(kPlayerBg), 0);
-    lv_obj_set_style_bg_opa(player_, LV_OPA_COVER, 0);
+    // 有毛玻璃背景图时它盖满整页，底色只会被白白填充一遍。
+    lv_obj_set_style_bg_opa(player_, background_pixels_ != nullptr ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
     lv_obj_remove_flag(player_, LV_OBJ_FLAG_SNAPPABLE);
     lv_obj_remove_flag(player_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_user_data(player_, this);
@@ -375,28 +377,14 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_pos(stop_list, 0, kListScroll);
     lv_obj_set_size(stop_list, kScreenWidth, kScreenHeight);
 
-    lv_obj_t* wave_top = lv_image_create(player_);
-    lv_image_set_src(wave_top, &lm_wave_top);
-    lv_image_set_inner_align(wave_top, LV_IMAGE_ALIGN_TILE);
-    lv_obj_set_size(wave_top, kScreenWidth, lm_wave_top.header.h);
-    lv_obj_align(wave_top, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_add_flag(wave_top, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
-    lv_obj_t* wave_bottom = lv_image_create(player_);
-    lv_image_set_src(wave_bottom, &lm_wave_bottom);
-    lv_image_set_inner_align(wave_bottom, LV_IMAGE_ALIGN_TILE);
-    lv_obj_set_size(wave_bottom, kScreenWidth, lm_wave_bottom.header.h);
-    lv_obj_align(wave_bottom, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_flag(wave_bottom, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
-    lv_obj_t* corner = lv_image_create(player_);
-    lv_image_set_src(corner, &lm_corner_left);
-    lv_obj_align(corner, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_add_flag(corner, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    corner = lv_image_create(player_);
-    lv_image_set_src(corner, &lm_corner_right);
-    lv_obj_align(corner, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_add_flag(corner, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    // 毛玻璃背景：一张全屏 RGB565 图，最先创建，垫在所有控件下面。缓冲区
+    // 分配失败时退回 demo 的白底。
+    if (background_pixels_ != nullptr) {
+        background_ = lv_image_create(player_);
+        lv_image_set_src(background_, &background_dsc_);
+        lv_obj_set_pos(background_, 0, 0);
+        lv_obj_add_flag(background_, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    }
 
     // demo 横屏版的两栏：左栏文字与控制，右栏封面与环形频谱；最后一行是
     // 停在列表上时露出的那条。
@@ -412,12 +400,13 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_flex_flow(title_box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_left(title_box, 14, 0);
     lv_obj_set_style_pad_row(title_box, 2, 0);
-    title_label_ = make_label(title_box, cjk_font(), kInkDark, "");
+    // 颜色在 apply_theme() 里按封面设置，这里只给占位色。
+    title_label_ = make_label(title_box, cjk_font(), kInkMid, "");
     lv_label_set_long_mode(title_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_width(title_label_, kTextWidth);
     artist_label_ = make_label(title_box, cjk_font(), kInkMid, "");
     pin_single_line(artist_label_, kTextWidth);
-    info_label_ = make_label(title_box, cjk_font(), kInkLight, "");
+    info_label_ = make_label(title_box, cjk_font(), kInkMid, "");
     pin_single_line(info_label_, kTextWidth);
     lv_obj_set_grid_cell(title_box, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_CENTER, 1, 1);
 
@@ -460,12 +449,12 @@ void AppLocalMusic::build_player_panel() {
         return image;
     };
     shuffle_icon_ = make_button(&lm_btn_rnd, PendingAction::ToggleShuffle, 1);
-    make_button(&lm_btn_prev, PendingAction::Prev, 2);
+    prev_icon_ = make_button(&lm_btn_prev, PendingAction::Prev, 2);
     play_icon_ = make_button(&lm_btn_play, PendingAction::PlayPause, 3);
-    make_button(&lm_btn_next, PendingAction::Next, 4);
+    next_icon_ = make_button(&lm_btn_next, PendingAction::Next, 4);
     loop_icon_ = make_button(&lm_btn_loop, PendingAction::CycleRepeat, 5);
     // 单曲循环在循环键右上角标一个「1」。
-    loop_badge_ = make_label(ctrl_box, &lv_font_montserrat_10, kSliderEnd, "1");
+    loop_badge_ = make_label(ctrl_box, &lv_font_montserrat_10, kInkMid, "1");
     lv_obj_set_grid_cell(loop_badge_, LV_GRID_ALIGN_END, 5, 1, LV_GRID_ALIGN_START, 0, 1);
     lv_obj_add_flag(loop_badge_, LV_OBJ_FLAG_HIDDEN);
 
@@ -475,15 +464,14 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_style_anim_duration(progress_, 100, 0);
     lv_obj_remove_flag(progress_, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_set_ext_click_area(progress_, 10);
-    lv_obj_set_style_bg_color(progress_, lv_color_hex(0xe4e1f3), LV_PART_MAIN);
+    // 参考图的极简进度条：细轨道、强调色进度、小圆点拖钮。颜色见 apply_theme()。
     lv_obj_set_style_bg_opa(progress_, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_image_src(progress_, &lm_slider_knob, LV_PART_KNOB);
-    lv_obj_set_style_bg_opa(progress_, LV_OPA_TRANSP, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(progress_, 12, LV_PART_KNOB);
+    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(progress_, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(progress_, 4, LV_PART_KNOB);
     lv_obj_set_style_shadow_width(progress_, 0, LV_PART_KNOB);
-    lv_obj_set_style_bg_grad_dir(progress_, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(progress_, lv_color_hex(kSliderStart), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_grad_color(progress_, lv_color_hex(kSliderEnd), LV_PART_INDICATOR);
     lv_obj_set_style_outline_width(progress_, 0, 0);
     lv_obj_set_user_data(progress_, this);
     lv_obj_add_event_cb(progress_, on_progress_event, LV_EVENT_PRESSED, nullptr);
@@ -522,7 +510,12 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_grid_cell(spectrum_obj_, LV_GRID_ALIGN_CENTER, 1, 1, LV_GRID_ALIGN_CENTER, 0, 7);
 
     cover_ = lv_image_create(spectrum_obj_);
-    lv_image_set_src(cover_, &lm_cover_default);
+    // 有封面缓冲区时用生成的圆形封面，否则退回 demo 的方形默认图。
+    if (cover_pixels_ != nullptr) {
+        lv_image_set_src(cover_, &cover_dsc_);
+    } else {
+        lv_image_set_src(cover_, &lm_cover_default);
+    }
     lv_image_set_antialias(cover_, false);
     lv_obj_center(cover_);
     lv_obj_add_flag(cover_, LV_OBJ_FLAG_CLICKABLE);
@@ -647,9 +640,177 @@ void AppLocalMusic::update_controls() {
 
     // 收藏用颜色和透明度双重表达，不只靠颜色。
     const bool favourite = has_track_ && current_favourite_;
-    lv_obj_set_style_image_opa(favourite_icon_, favourite ? LV_OPA_COVER : LV_OPA_30, 0);
-    lv_obj_set_style_image_recolor(favourite_icon_, lv_color_hex(kFavourite), 0);
-    lv_obj_set_style_image_recolor_opa(favourite_icon_, favourite ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_image_opa(favourite_icon_, favourite ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_image_recolor(favourite_icon_,
+                                   favourite ? lv_color_hex(kFavourite) : to_lv(theme_.ink), 0);
+    lv_obj_set_style_image_recolor_opa(favourite_icon_, LV_OPA_COVER, 0);
+}
+
+void AppLocalMusic::apply_theme() {
+    if (player_ == nullptr) return;
+    const lv_color_t ink = to_lv(theme_.ink);
+    const lv_color_t soft = to_lv(theme_.ink_soft);
+    const lv_color_t faint = to_lv(theme_.ink_faint);
+    const lv_color_t accent = to_lv(theme_.accent);
+
+    lv_obj_set_style_text_color(title_label_, ink, 0);
+    lv_obj_set_style_text_color(artist_label_, soft, 0);
+    lv_obj_set_style_text_color(info_label_, faint, 0);
+    lv_obj_set_style_text_color(format_label_, faint, 0);
+    lv_obj_set_style_text_color(time_label_, soft, 0);
+    lv_obj_set_style_text_color(handle_label_, soft, 0);
+    lv_obj_set_style_text_color(loop_badge_, accent, 0);
+    lv_obj_t* handle_bar = lv_obj_get_child(lv_obj_get_parent(handle_label_), 1);
+    if (handle_bar != nullptr) lv_obj_set_style_bg_color(handle_bar, soft, 0);
+
+    // demo 的按钮图是紫色渐变；整体重新着色成主题墨色，做成参考图那样的
+    // 单色线性图标，深浅背景上都清楚。
+    for (lv_obj_t* icon : {shuffle_icon_, prev_icon_, play_icon_, next_icon_, loop_icon_}) {
+        lv_obj_set_style_image_recolor(icon, ink, 0);
+        lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+    }
+
+    // 进度条：半透明墨色轨道，强调色进度与拖钮。
+    lv_obj_set_style_bg_color(progress_, ink, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(progress_, LV_OPA_20, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(progress_, accent, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(progress_, accent, LV_PART_KNOB);
+
+    // 频谱光条：短条是强调色的淡色，中段是强调色，伸到最长时变白。
+    const lv_color_t pale = theme_.dark ? lv_color_mix(accent, lv_color_black(), 160)
+                                        : lv_color_mix(accent, lv_color_white(), 110);
+    bar_colours_ = {pale, accent, lv_color_white()};
+
+    update_controls();
+    if (spectrum_obj_ != nullptr) lv_obj_invalidate(spectrum_obj_);
+}
+
+// ---------------------------------------------------------------------------
+// 封面与毛玻璃背景
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void* alloc_psram(std::size_t bytes) {
+#ifdef ESP_PLATFORM
+    void* pointer = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return pointer != nullptr ? pointer : lv_malloc(bytes);
+#else
+    return lv_malloc(bytes);
+#endif
+}
+
+void free_psram(void* pointer) {
+    if (pointer == nullptr) return;
+#ifdef ESP_PLATFORM
+    heap_caps_free(pointer);
+#else
+    lv_free(pointer);
+#endif
+}
+
+}  // namespace
+
+bool AppLocalMusic::allocate_cover_buffers() {
+    if (cover_pixels_ != nullptr) return true;
+    const std::size_t cover_bytes = static_cast<std::size_t>(kCoverPixels) * kCoverPixels * 4;
+    const std::size_t background_bytes =
+        static_cast<std::size_t>(kBackgroundWidth) * kBackgroundHeight * sizeof(uint16_t);
+    cover_pixels_ = static_cast<uint8_t*>(alloc_psram(cover_bytes));
+    cover_scratch_ = static_cast<uint8_t*>(alloc_psram(cover_bytes));
+    background_pixels_ = static_cast<uint16_t*>(alloc_psram(background_bytes));
+    background_scratch_ = static_cast<uint16_t*>(alloc_psram(background_bytes));
+    if (cover_pixels_ == nullptr || cover_scratch_ == nullptr || background_pixels_ == nullptr ||
+        background_scratch_ == nullptr) {
+        free_cover_buffers();
+        return false;
+    }
+    std::memset(cover_pixels_, 0, cover_bytes);
+    std::memset(background_pixels_, 0xff, background_bytes);
+
+    cover_dsc_ = {};
+    cover_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
+    cover_dsc_.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    cover_dsc_.header.w = kCoverPixels;
+    cover_dsc_.header.h = kCoverPixels;
+    cover_dsc_.header.stride = kCoverPixels * 4;
+    cover_dsc_.data_size = cover_bytes;
+    cover_dsc_.data = cover_pixels_;
+
+    background_dsc_ = {};
+    background_dsc_.header.magic = LV_IMAGE_HEADER_MAGIC;
+    background_dsc_.header.cf = LV_COLOR_FORMAT_RGB565;
+    background_dsc_.header.w = kBackgroundWidth;
+    background_dsc_.header.h = kBackgroundHeight;
+    background_dsc_.header.stride = kBackgroundWidth * 2;
+    background_dsc_.data_size = background_bytes;
+    background_dsc_.data = reinterpret_cast<const uint8_t*>(background_pixels_);
+    return true;
+}
+
+void AppLocalMusic::free_cover_buffers() {
+    free_psram(cover_pixels_);
+    free_psram(cover_scratch_);
+    free_psram(background_pixels_);
+    free_psram(background_scratch_);
+    cover_pixels_ = nullptr;
+    cover_scratch_ = nullptr;
+    background_pixels_ = nullptr;
+    background_scratch_ = nullptr;
+    cover_dsc_ = {};
+    background_dsc_ = {};
+}
+
+void AppLocalMusic::prepare_default_cover() {
+    // demo 的默认封面是 RGB565，转成 RGB888 给封面加工流程用；它高 107 像素，
+    // 最后一行重复一次补成正方形。
+    const lv_image_header_t& header = lm_cover_default.header;
+    const int size = kCoverPixels;
+    default_cover_rgb_.assign(static_cast<std::size_t>(size) * size * 3, 0);
+    for (int y = 0; y < size; ++y) {
+        const int source_y = std::min<int>(y, header.h - 1);
+        const auto* row = reinterpret_cast<const uint16_t*>(lm_cover_default.data +
+                                                            static_cast<std::size_t>(source_y) * header.stride);
+        for (int x = 0; x < size; ++x) {
+            const uint16_t pixel = row[std::min<int>(x, header.w - 1)];
+            uint8_t* out = default_cover_rgb_.data() + (static_cast<std::size_t>(y) * size + x) * 3;
+            out[0] = static_cast<uint8_t>(((pixel >> 11) & 0x1f) * 255 / 31);
+            out[1] = static_cast<uint8_t>(((pixel >> 5) & 0x3f) * 255 / 63);
+            out[2] = static_cast<uint8_t>((pixel & 0x1f) * 255 / 31);
+        }
+    }
+}
+
+void AppLocalMusic::load_cover(const uint8_t* jpeg, std::size_t length) {
+    if (cover_pixels_ == nullptr) return;
+
+    std::vector<uint8_t> decoded;
+    const std::vector<uint8_t>* rgb = &default_cover_rgb_;
+    if (jpeg != nullptr && media::decode_cover_jpeg(jpeg, length, kCoverPixels, decoded)) {
+        rgb = &decoded;
+    }
+    if (rgb->size() != static_cast<std::size_t>(kCoverPixels) * kCoverPixels * 3) return;
+
+    // 全部计算在锁外进行：背景放大是 7.7 万像素的运算，不能卡住界面。
+    uint8_t grid[kThemeGrid * kThemeGrid * 3];
+    media::downsample_rgb888(rgb->data(), kCoverPixels, kCoverPixels, grid, kThemeGrid, kThemeGrid);
+    const media::CoverTheme theme = media::analyse_cover(grid, kThemeGrid, kThemeGrid);
+    media::make_round_cover(rgb->data(), kCoverPixels, cover_scratch_);
+    media::make_frosted_background(grid, kThemeGrid, kThemeGrid, theme, background_scratch_,
+                                   kBackgroundWidth, kBackgroundHeight);
+
+    LvglLockGuard lock;
+    std::memcpy(cover_pixels_, cover_scratch_, cover_dsc_.data_size);
+    std::memcpy(background_pixels_, background_scratch_, background_dsc_.data_size);
+    // 像素换了但描述符地址没变。本固件的图像缓存大小为 0（CONFIG_LV_CACHE_DEF_SIZE），
+    // 不存在旧图缓存；重新设一次源并整页重绘即可。
+    theme_ = theme;
+    if (cover_ != nullptr && cover_pixels_ != nullptr) lv_image_set_src(cover_, &cover_dsc_);
+    if (background_ != nullptr) lv_image_set_src(background_, &background_dsc_);
+    if (player_ != nullptr) {
+        apply_theme();
+        lv_obj_invalidate(player_);
+    }
 }
 
 void AppLocalMusic::refresh_view() {
@@ -734,6 +895,9 @@ void AppLocalMusic::refresh_spectrum() {
     if (spectrum_obj_ == nullptr || cover_ == nullptr) return;
     const uint32_t now = lv_tick_get();
     if (now - last_spectrum_tick_ < kSpectrumIntervalMs) return;
+    // 手指正在拖动滚动时不更新频谱：每帧失效 156x156 的区域会和滚动抢渲染
+    // 时间，滚动是用户直接感知的，优先保证它跟手。
+    if (gesture_indev_ != nullptr && lv_indev_get_scroll_obj(gesture_indev_) != nullptr) return;
     last_spectrum_tick_ = now;
 
     // Drain whatever the audio task published since the last frame.  The FFT
@@ -869,16 +1033,17 @@ void AppLocalMusic::on_spectrum_draw(lv_event_t* event) {
         int32_t v = (radius[k] * blend + radius[j] * (kBlendFrames - blend)) / kBlendFrames;
         if (v > kBarMaxRadius) v = kBarMaxRadius;
 
+        const auto& colours = self->bar_colours_;
         if (v < kBarColour1Stop) {
-            draw_dsc.color = lv_color_hex(kBarColour1);
+            draw_dsc.color = colours[0];
         } else if (v >= kBarColour3Stop) {
-            draw_dsc.color = lv_color_hex(kBarColour3);
+            draw_dsc.color = colours[2];
         } else if (v > kBarColour2Stop) {
-            draw_dsc.color = lv_color_mix(lv_color_hex(kBarColour3), lv_color_hex(kBarColour2),
+            draw_dsc.color = lv_color_mix(colours[2], colours[1],
                                           static_cast<uint8_t>((v - kBarColour2Stop) * 255 /
                                                                (kBarColour3Stop - kBarColour2Stop)));
         } else {
-            draw_dsc.color = lv_color_mix(lv_color_hex(kBarColour2), lv_color_hex(kBarColour1),
+            draw_dsc.color = lv_color_mix(colours[1], colours[0],
                                           static_cast<uint8_t>((v - kBarColour1Stop) * 255 /
                                                                (kBarColour2Stop - kBarColour1Stop)));
         }

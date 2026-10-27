@@ -195,6 +195,22 @@ public:
         // still counts even after the battery is full.
         return current_direction != 2 || is_charging_done;
     }
+
+    // 周期轮询专用：不经过会 ESP_ERROR_CHECK 的 ReadReg。共享的 I2C 总线偶尔
+    // 超时（播放时实测触摸芯片也同时超时），一次读失败不能让整机 abort 重启；
+    // 失败时返回 false，调用方跳过这一轮。
+    bool TryReadPowerState(bool& has_external_power, bool& is_discharging)
+    {
+        uint8_t power_status = 0;
+        if (TryReadRegs(0x01, &power_status, 1) != ESP_OK) {
+            return false;
+        }
+        const uint8_t current_direction = (power_status & 0b01100000) >> 5;
+        const bool is_charging_done     = (power_status & 0b00000111) == 0b00000100;
+        has_external_power              = current_direction != 2 || is_charging_done;
+        is_discharging                  = current_direction == 2;
+        return true;
+    }
 };
 
 class CustomBacklight : public Backlight {
@@ -374,6 +390,7 @@ private:
     hal_bridge::XiaozhiConfig_t xiaozhi_config_;
     bool last_power_save_enabled_      = false;
     int64_t last_power_state_check_ms_ = 0;
+    int64_t last_power_read_error_log_ms_ = 0;
 
     bool ShouldEnablePowerSave(bool has_external_power, bool is_discharging) const
     {
@@ -402,7 +419,17 @@ private:
         }
         last_power_state_check_ms_ = now_ms;
 
-        UpdatePowerSaveEnabled(pmic_->IsExternalPowerConnected(), pmic_->IsDischarging());
+        bool has_external_power = false;
+        bool is_discharging     = false;
+        if (!pmic_->TryReadPowerState(has_external_power, is_discharging)) {
+            // 跳过这一轮，下一秒再读；限频打印，避免总线不稳时刷屏。
+            if (now_ms - last_power_read_error_log_ms_ >= 10000) {
+                ESP_LOGW(TAG, "PMIC power state read failed, skipped this poll");
+                last_power_read_error_log_ms_ = now_ms;
+            }
+            return;
+        }
+        UpdatePowerSaveEnabled(has_external_power, is_discharging);
     }
 
     void InitializePowerSaveTimer()

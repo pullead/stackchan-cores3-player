@@ -79,6 +79,10 @@ public:
     // Reads up to `max_bytes` from the start of a track through the same bus
     // handoff the player uses, but without the playback stream.
     bool read_head(const SdTrack& track, std::vector<uint8_t>& buffer, std::size_t max_bytes);
+    // 应用打开期间持有一份挂载。期间打开的文件流只做引用计数，不再每个文件
+    // 都完整挂载、卸载一次（那会在持有显示锁时冻结屏幕约 90 ms）。
+    bool retain_mount();
+    void release_mount();
     const std::string& last_error() const noexcept;
 
 private:
@@ -99,6 +103,8 @@ private:
     board::Spi3DisplayHandoff* handoff_ = nullptr;
     SdCardOperations operations_;
     void* card_ = nullptr;
+    int mount_refs_ = 0;
+    bool retained_ = false;
     std::string last_error_;
 };
 

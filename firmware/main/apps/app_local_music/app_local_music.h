@@ -14,6 +14,7 @@
 #include <media/audio/spectrum_analyzer.h>
 #include <media/audio/board_audio_session_port.h>
 #include <media/audio/core_s3_speaker_sink.h>
+#include <media/library/cover_art.h>
 #include <media/library/library_store.h>
 #include <media/library/mp3_info.h>
 #include <media/library/play_mode.h>
@@ -107,6 +108,17 @@ private:
     void scroll_to_list(bool animate);
     void scroll_to_player(bool animate);
     bool list_visible() const;
+    // 按 theme_ 给文字、图标、进度条与频谱上色（要求持有 LVGL 锁）。
+    void apply_theme();
+
+    // —— 封面与毛玻璃背景（app_local_music_view.cpp）——
+    bool allocate_cover_buffers();
+    void free_cover_buffers();
+    // 默认封面（无内嵌图时使用）的 RGB888，onOpen 时准备一次。
+    void prepare_default_cover();
+    // 由封面 JPEG（nullptr 表示用默认封面）生成圆形封面、背景与配色，再在
+    // LVGL 锁内换上。计算在调用线程进行，不持有 LVGL 锁。
+    void load_cover(const uint8_t* jpeg, std::size_t length);
 
     static void on_row_clicked(lv_event_t* event);
     static void on_list_scrolled(lv_event_t* event);
@@ -177,7 +189,10 @@ private:
     lv_obj_t* info_label_ = nullptr;
     lv_obj_t* favourite_icon_ = nullptr;
     lv_obj_t* format_label_ = nullptr;
+    lv_obj_t* background_ = nullptr;
     lv_obj_t* shuffle_icon_ = nullptr;
+    lv_obj_t* prev_icon_ = nullptr;
+    lv_obj_t* next_icon_ = nullptr;
     lv_obj_t* play_icon_ = nullptr;
     lv_obj_t* loop_icon_ = nullptr;
     lv_obj_t* loop_badge_ = nullptr;
@@ -200,6 +215,22 @@ private:
     uint32_t last_bass_frame_ = 0;
     uint32_t last_spectrum_tick_ = 0;
     bool spectrum_resting_ = true;
+
+    // 封面与背景。显示用的缓冲区由 LVGL 图像描述符引用；新封面先算进 scratch，
+    // 再在锁内拷贝过去，避免 LVGL 渲染到一半的数据。
+    static constexpr int kCoverPixels = 108;
+    static constexpr int kBackgroundWidth = 320;
+    static constexpr int kBackgroundHeight = 240;
+    static constexpr int kThemeGrid = 6;
+    uint8_t* cover_pixels_ = nullptr;
+    uint8_t* cover_scratch_ = nullptr;
+    uint16_t* background_pixels_ = nullptr;
+    uint16_t* background_scratch_ = nullptr;
+    lv_image_dsc_t cover_dsc_{};
+    lv_image_dsc_t background_dsc_{};
+    std::vector<uint8_t> default_cover_rgb_;
+    media::CoverTheme theme_;
+    std::array<lv_color_t, 3> bar_colours_{};
 
     std::size_t current_index_ = 0;
     bool has_track_ = false;

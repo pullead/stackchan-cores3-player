@@ -279,7 +279,7 @@ bool set_shared_pin_input(void*, std::string& error) {
     REG_WRITE(GPIO_FUNC35_OUT_SEL_CFG_REG, SPI3_Q_OUT_IDX);
     gpio_input_enable(GPIO_NUM_35);
     const uint32_t sd_input_route = REG_READ(GPIO_FUNC35_IN_SEL_CFG_REG);
-    ESP_LOGW(kTag, "GPIO35 SD route signal=%d in=0x%08lx mux=0x%08lx pin=0x%08lx levels(miso=%d sck=%d mosi=%d cs=%d) out=%lu enable1=%08lx",
+    ESP_LOGD(kTag, "GPIO35 SD route signal=%d in=0x%08lx mux=0x%08lx pin=0x%08lx levels(miso=%d sck=%d mosi=%d cs=%d) out=%lu enable1=%08lx",
              SPI3_Q_IN_IDX,
              static_cast<unsigned long>(sd_input_route),
              static_cast<unsigned long>(REG_READ(IO_MUX_GPIO35_REG)),
@@ -305,7 +305,7 @@ bool set_sd_chip_select_high(void*, std::string& error) {
         ESP_LOGE(kTag, "%s; display remains locked to prevent SPI3 contention", error.c_str());
         return false;
     }
-    ESP_LOGW(kTag, "SD CS forced high, level=%d out=%d enable=%d input=%d",
+    ESP_LOGD(kTag, "SD CS forced high, level=%d out=%d enable=%d input=%d",
              gpio_get_level(GPIO_NUM_4),
              static_cast<int>((REG_READ(GPIO_OUT_REG) >> GPIO_NUM_4) & 1u),
              static_cast<int>((REG_READ(GPIO_ENABLE_REG) >> GPIO_NUM_4) & 1u),

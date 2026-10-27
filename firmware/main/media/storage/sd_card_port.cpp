@@ -160,6 +160,40 @@ std::unique_ptr<AudioStream> SdCardPort::open_track(const SdTrack& track) {
 #endif
 }
 
+bool SdCardPort::retain_mount() {
+#ifdef ESP_PLATFORM
+    if (handoff_ == nullptr || retained_) return retained_;
+    // 真正挂载要占用总线；计数加一则不需要，但统一在借到总线后做最简单。
+    board::Spi3DisplayHandoffGuard guard(*handoff_);
+    if (!guard.acquired()) {
+        last_error_ = handoff_->last_error();
+        return false;
+    }
+    std::string error;
+    retained_ = mount_hardware(this, error);
+    if (!retained_) last_error_ = error;
+    guard.release();
+    return retained_;
+#else
+    return false;
+#endif
+}
+
+void SdCardPort::release_mount() {
+#ifdef ESP_PLATFORM
+    if (handoff_ == nullptr || !retained_) return;
+    board::Spi3DisplayHandoffGuard guard(*handoff_);
+    if (!guard.acquired()) {
+        last_error_ = handoff_->last_error();
+        return;
+    }
+    std::string error;
+    if (!unmount_hardware(this, error)) last_error_ = error;
+    retained_ = false;
+    guard.release();
+#endif
+}
+
 bool SdCardPort::read_head(const SdTrack& track, std::vector<uint8_t>& buffer, std::size_t max_bytes) {
     buffer.clear();
     if (operations_.read_head == nullptr) {
@@ -491,8 +525,10 @@ std::string raw_card_diagnostic() {
 bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
     auto& port = *static_cast<SdCardPort*>(raw_context);
     if (port.card_ != nullptr) {
-        error = "SD card is already mounted";
-        return false;
+        // 引用计数：应用持有一份常驻挂载时，每个文件流的挂载只是计数加一，
+        // 不再在持有显示锁的情况下花约 90 ms 重新初始化卡。
+        ++port.mount_refs_;
+        return true;
     }
 
     if (!ensure_sd_bus(error)) {
@@ -537,6 +573,7 @@ bool SdCardPort::mount_hardware(void* raw_context, std::string& error) {
     }
 
     port.card_ = card;
+    port.mount_refs_ = 1;
     ESP_LOGI(kTag, "TF browse-only mount ready inside display handoff");
     return true;
 }
@@ -547,6 +584,11 @@ bool SdCardPort::unmount_hardware(void* raw_context, std::string& error) {
         error = "SD card is not mounted";
         return false;
     }
+    if (port.mount_refs_ > 1) {
+        --port.mount_refs_;
+        return true;
+    }
+    port.mount_refs_ = 0;
 
     const esp_err_t result = esp_vfs_fat_sdcard_unmount(kMountPath, static_cast<sdmmc_card_t*>(port.card_));
     if (result != ESP_OK) {
