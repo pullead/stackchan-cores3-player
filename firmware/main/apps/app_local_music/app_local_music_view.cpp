@@ -48,6 +48,7 @@ LV_IMAGE_DECLARE(lm_btn_loop);
 LV_IMAGE_DECLARE(lm_btn_list_play);
 LV_IMAGE_DECLARE(lm_btn_list_pause);
 LV_IMAGE_DECLARE(lm_icn_heart);
+LV_IMAGE_DECLARE(lm_slider_knob);
 LV_IMAGE_DECLARE(lm_list_border);
 LV_IMAGE_DECLARE(lm_cover_default);
 }
@@ -93,6 +94,11 @@ constexpr uint32_t kListPressed = 0x4c4965;
 constexpr uint32_t kListTitle = 0xffffff;
 constexpr uint32_t kListArtist = 0xb1b0be;
 constexpr uint32_t kFavourite = 0xe0457b;
+// demo 进度条的渐变两端。
+constexpr uint32_t kSliderStart = 0x569af8;
+constexpr uint32_t kSliderEnd = 0xa666f1;
+// 圆形封面外圈白边的宽度（像素）。
+constexpr int kCoverRingWidth = 2;
 
 lv_color_t to_lv(const media::Rgb& colour) { return lv_color_make(colour.r, colour.g, colour.b); }
 
@@ -464,14 +470,16 @@ void AppLocalMusic::build_player_panel() {
     lv_obj_set_style_anim_duration(progress_, 100, 0);
     lv_obj_remove_flag(progress_, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_set_ext_click_area(progress_, 10);
-    // 参考图的极简进度条：细轨道、强调色进度、小圆点拖钮。颜色见 apply_theme()。
+    // demo 原样的进度条：浅色细轨道、蓝紫渐变进度、图片拖钮。
+    lv_obj_set_style_bg_color(progress_, lv_color_hex(0xe4e1f3), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(progress_, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(progress_, LV_OPA_COVER, LV_PART_KNOB);
-    lv_obj_set_style_radius(progress_, LV_RADIUS_CIRCLE, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(progress_, 4, LV_PART_KNOB);
+    lv_obj_set_style_bg_image_src(progress_, &lm_slider_knob, LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(progress_, LV_OPA_TRANSP, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(progress_, 12, LV_PART_KNOB);
     lv_obj_set_style_shadow_width(progress_, 0, LV_PART_KNOB);
+    lv_obj_set_style_bg_grad_dir(progress_, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(progress_, lv_color_hex(kSliderStart), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_grad_color(progress_, lv_color_hex(kSliderEnd), LV_PART_INDICATOR);
     lv_obj_set_style_outline_width(progress_, 0, 0);
     lv_obj_set_user_data(progress_, this);
     lv_obj_add_event_cb(progress_, on_progress_event, LV_EVENT_PRESSED, nullptr);
@@ -640,10 +648,10 @@ void AppLocalMusic::update_controls() {
 
     // 收藏用颜色和透明度双重表达，不只靠颜色。
     const bool favourite = has_track_ && current_favourite_;
+    // demo 原图标：未收藏时半透明原色，收藏后染成粉红。
     lv_obj_set_style_image_opa(favourite_icon_, favourite ? LV_OPA_COVER : LV_OPA_50, 0);
-    lv_obj_set_style_image_recolor(favourite_icon_,
-                                   favourite ? lv_color_hex(kFavourite) : to_lv(theme_.ink), 0);
-    lv_obj_set_style_image_recolor_opa(favourite_icon_, LV_OPA_COVER, 0);
+    lv_obj_set_style_image_recolor(favourite_icon_, lv_color_hex(kFavourite), 0);
+    lv_obj_set_style_image_recolor_opa(favourite_icon_, favourite ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
 }
 
 void AppLocalMusic::apply_theme() {
@@ -663,18 +671,7 @@ void AppLocalMusic::apply_theme() {
     lv_obj_t* handle_bar = lv_obj_get_child(lv_obj_get_parent(handle_label_), 1);
     if (handle_bar != nullptr) lv_obj_set_style_bg_color(handle_bar, soft, 0);
 
-    // demo 的按钮图是紫色渐变；整体重新着色成主题墨色，做成参考图那样的
-    // 单色线性图标，深浅背景上都清楚。
-    for (lv_obj_t* icon : {shuffle_icon_, prev_icon_, play_icon_, next_icon_, loop_icon_}) {
-        lv_obj_set_style_image_recolor(icon, ink, 0);
-        lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-    }
-
-    // 进度条：半透明墨色轨道，强调色进度与拖钮。
-    lv_obj_set_style_bg_color(progress_, ink, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(progress_, LV_OPA_20, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(progress_, accent, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(progress_, accent, LV_PART_KNOB);
+    // 按钮图标与进度条保持 demo 原样（紫色渐变），不随封面着色。
 
     // 频谱光条：短条是强调色的淡色，中段是强调色，伸到最长时变白。
     const lv_color_t pale = theme_.dark ? lv_color_mix(accent, lv_color_black(), 160)
@@ -795,7 +792,7 @@ void AppLocalMusic::load_cover(const uint8_t* jpeg, std::size_t length) {
     uint8_t grid[kThemeGrid * kThemeGrid * 3];
     media::downsample_rgb888(rgb->data(), kCoverPixels, kCoverPixels, grid, kThemeGrid, kThemeGrid);
     const media::CoverTheme theme = media::analyse_cover(grid, kThemeGrid, kThemeGrid);
-    media::make_round_cover(rgb->data(), kCoverPixels, cover_scratch_);
+    media::make_round_cover(rgb->data(), kCoverPixels, cover_scratch_, kCoverRingWidth);
     media::make_frosted_background(grid, kThemeGrid, kThemeGrid, theme, background_scratch_,
                                    kBackgroundWidth, kBackgroundHeight);
 

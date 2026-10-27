@@ -180,23 +180,32 @@ void downsample_rgb888(const std::uint8_t* src, int src_w, int src_h, std::uint8
     }
 }
 
-void make_round_cover(const std::uint8_t* rgb, int size, std::uint8_t* argb_out) {
+void make_round_cover(const std::uint8_t* rgb, int size, std::uint8_t* argb_out, int ring_width) {
     if (rgb == nullptr || argb_out == nullptr || size <= 0) return;
     const float centre = (static_cast<float>(size) - 1.0f) * 0.5f;
     const float radius = static_cast<float>(size) * 0.5f;
+    const float inner_radius = radius - static_cast<float>(std::max(ring_width, 0));
+    auto coverage = [](float value) {
+        return value <= 0.0f ? 0.0f : (value >= 1.0f ? 1.0f : value);
+    };
     for (int y = 0; y < size; ++y) {
         for (int x = 0; x < size; ++x) {
             const float dx = static_cast<float>(x) - centre;
             const float dy = static_cast<float>(y) - centre;
-            const float coverage = radius - std::sqrt(dx * dx + dy * dy) + 0.5f;
-            const int alpha = coverage <= 0.0f ? 0 : (coverage >= 1.0f ? 255 : static_cast<int>(coverage * 255.0f));
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            const float outer = coverage(radius - distance + 0.5f);
+            // 白边占比：内边界以外为 1，内边界以内为 0，跨边界的像素按比例混合。
+            const float ring = ring_width > 0 ? coverage(distance - inner_radius + 0.5f) : 0.0f;
             const std::uint8_t* in = rgb + (static_cast<std::size_t>(y) * size + x) * 3;
             std::uint8_t* out = argb_out + (static_cast<std::size_t>(y) * size + x) * 4;
+            auto blend = [ring](std::uint8_t channel) {
+                return static_cast<std::uint8_t>(channel + (255.0f - channel) * ring + 0.5f);
+            };
             // LVGL 的 lv_color32_t 内存顺序是 B, G, R, A。
-            out[0] = in[2];
-            out[1] = in[1];
-            out[2] = in[0];
-            out[3] = static_cast<std::uint8_t>(alpha);
+            out[0] = blend(in[2]);
+            out[1] = blend(in[1]);
+            out[2] = blend(in[0]);
+            out[3] = static_cast<std::uint8_t>(outer * 255.0f);
         }
     }
 }

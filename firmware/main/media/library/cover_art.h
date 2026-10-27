@@ -45,8 +45,10 @@ void downsample_rgb888(const std::uint8_t* src, int src_w, int src_h, std::uint8
                        int dst_h);
 
 // 由正方形 RGB888 图像生成 LVGL ARGB8888（内存顺序 B,G,R,A）的圆形封面，
-// 圆外完全透明，边缘一像素做抗锯齿。
-void make_round_cover(const std::uint8_t* rgb, int size, std::uint8_t* argb_out);
+// 圆外完全透明，边缘一像素做抗锯齿。ring_width > 0 时在圆周内侧画一圈
+// 这么宽的白边，内外两条边界都抗锯齿。
+void make_round_cover(const std::uint8_t* rgb, int size, std::uint8_t* argb_out,
+                      int ring_width = 0);
 
 // 由封面的小尺寸网格（RGB888）推出配色。
 CoverTheme analyse_cover(const std::uint8_t* grid, int grid_w, int grid_h);

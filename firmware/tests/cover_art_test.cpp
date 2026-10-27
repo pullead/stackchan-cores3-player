@@ -233,6 +233,14 @@ int main() {
         assert(argb[((size - 1) * size + size - 1) * 4 + 3] == 0);  // 右下角
         // 边上的中点在圆内但靠近边缘：部分透明或不透明，绝不是全透明。
         assert(argb[(8 * size + 0) * 4 + 3] > 0);
+
+        // 加 2 像素白边：圆周内侧变白，中心颜色不变，圆外仍然透明。
+        make_round_cover(rgb.data(), size, argb.data(), 2);
+        const uint8_t* rim = argb.data() + (8 * size + 1) * 4;
+        assert(rim[0] > 240 && rim[1] > 240 && rim[2] > 240);
+        const uint8_t* middle = argb.data() + (8 * size + 8) * 4;
+        assert(middle[0] == 50 && middle[1] == 100 && middle[2] == 200 && middle[3] == 255);
+        assert(argb[3] == 0);
     }
 
     // 配色：暗封面用浅色字，亮封面用深色字；灰度封面不把灰色当强调色。

@@ -36,6 +36,7 @@ ASSETS = [
     ("btn_list_play.png", "lm_btn_list_play", 32, 33, "ARGB8888"),
     ("btn_list_pause.png", "lm_btn_list_pause", 32, 33, "ARGB8888"),
     ("icn_heart.png", "lm_icn_heart", 20, 20, "ARGB8888"),
+    ("icn_slider.png", "lm_slider_knob", 26, 27, "ARGB8888"),
     ("list_border.png", "lm_list_border", 272, 4, "ARGB8888"),
     ("cover_1.png", "lm_cover_default", 108, 107, "RGB565"),
 ]
