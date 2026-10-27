@@ -188,7 +188,6 @@ private:
     lv_obj_t* artist_label_ = nullptr;
     lv_obj_t* info_label_ = nullptr;
     lv_obj_t* favourite_icon_ = nullptr;
-    lv_obj_t* format_label_ = nullptr;
     lv_obj_t* background_ = nullptr;
     lv_obj_t* shuffle_icon_ = nullptr;
     lv_obj_t* prev_icon_ = nullptr;
@@ -257,7 +256,6 @@ private:
     // 已绘制的状态，未变化时跳过 LVGL 调用。
     std::string shown_info_;
     std::string shown_time_;
-    std::string shown_format_;
     media::PlaybackState shown_state_ = media::PlaybackState::Idle;
     bool shown_list_visible_ = true;
     std::size_t shown_highlight_ = SIZE_MAX;

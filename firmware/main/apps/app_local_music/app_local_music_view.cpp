@@ -196,7 +196,6 @@ void AppLocalMusic::build_ui() {
 
     shown_info_.clear();
     shown_time_.clear();
-    shown_format_.clear();
     shown_state_ = media::PlaybackState::Idle;
     shown_list_visible_ = !list_visible();
     spectrum_resting_ = false;
@@ -228,7 +227,6 @@ void AppLocalMusic::destroy_ui() {
     artist_label_ = nullptr;
     info_label_ = nullptr;
     favourite_icon_ = nullptr;
-    format_label_ = nullptr;
     background_ = nullptr;
     shuffle_icon_ = nullptr;
     prev_icon_ = nullptr;
@@ -443,8 +441,9 @@ void AppLocalMusic::build_player_panel() {
     pin_single_line(info_label_, kTextWidth);
     lv_obj_set_grid_cell(title_box, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_CENTER, 1, 1);
 
-    // 小图标行：收藏、随机、循环与格式信息。随机和循环从播放键行挪到这里，
-    // 播放键行才放得下更大的按钮（左栏只有 172 px，右边是频谱）。
+    // 小图标行：收藏、随机、循环，与歌名左对齐。随机和循环从播放键行挪到
+    // 这里，播放键行才放得下更大的按钮（左栏只有 172 px，右边是频谱）。
+    // 格式信息不放这行（会挤到频谱），改在状态行显示。
     lv_obj_t* icon_box = make_box(player_);
     lv_obj_set_height(icon_box, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(icon_box, LV_FLEX_FLOW_ROW);
@@ -468,7 +467,6 @@ void AppLocalMusic::build_player_panel() {
     loop_badge_ = make_label(loop_box, &lv_font_montserrat_10, kInkMid, "1");
     lv_obj_align(loop_badge_, LV_ALIGN_TOP_RIGHT, 6, -6);
     lv_obj_add_flag(loop_badge_, LV_OBJ_FLAG_HIDDEN);
-    format_label_ = make_label(icon_box, &lv_font_montserrat_12, kInkMid, "");
     lv_obj_set_grid_cell(icon_box, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_CENTER, 3, 1);
 
     // 播放键行：上一首、播放、下一首，在左栏里均匀分布。
@@ -701,7 +699,6 @@ void AppLocalMusic::apply_theme() {
     lv_obj_set_style_text_color(title_label_, ink, 0);
     lv_obj_set_style_text_color(artist_label_, soft, 0);
     lv_obj_set_style_text_color(info_label_, faint, 0);
-    lv_obj_set_style_text_color(format_label_, faint, 0);
     lv_obj_set_style_text_color(time_label_, soft, 0);
     lv_obj_set_style_text_color(total_label_, soft, 0);
     lv_obj_set_style_text_color(handle_label_, soft, 0);
@@ -857,7 +854,18 @@ void AppLocalMusic::refresh_view() {
     const media::LocalPlaybackController::PlaybackTick tick =
         playback_ ? playback_->tick() : media::LocalPlaybackController::PlaybackTick{};
 
-    const std::string info = playback_status(tick.state);
+    // 状态行：播放中显示格式与采样率（比「播放中」更有信息量），其余时候
+    // 显示缓冲、暂停、出错等状态。格式信息原先单独占图标行，会挤到频谱。
+    std::string info = playback_status(tick.state);
+    if (has_track_ && tick.state == media::PlaybackState::Playing && tick.sample_rate > 0 &&
+        current_index_ < tracks_.size()) {
+        // 中文全角字符在 UTF-8 里各占 3 字节，缓冲区要按字节留足。
+        char rate[48] = {};
+        std::snprintf(rate, sizeof(rate), "  %u.%ukHz（静音）",
+                      static_cast<unsigned>(tick.sample_rate / 1000),
+                      static_cast<unsigned>((tick.sample_rate % 1000) / 100));
+        info = extension_label(tracks_[current_index_].path) + rate;
+    }
     if (info != shown_info_) {
         shown_info_ = info;
         lv_label_set_text(info_label_, shown_info_.c_str());
@@ -887,18 +895,6 @@ void AppLocalMusic::refresh_view() {
             }
             lv_slider_set_value(progress_, value, LV_ANIM_OFF);
         }
-    }
-
-    std::string format;
-    if (has_track_ && tick.sample_rate > 0 && current_index_ < tracks_.size()) {
-        char rate[24] = {};
-        std::snprintf(rate, sizeof(rate), "  %u.%u kHz", static_cast<unsigned>(tick.sample_rate / 1000),
-                      static_cast<unsigned>((tick.sample_rate % 1000) / 100));
-        format = extension_label(tracks_[current_index_].path) + rate;
-    }
-    if (format != shown_format_) {
-        shown_format_ = format;
-        lv_label_set_text(format_label_, shown_format_.c_str());
     }
 
     if (tick.state != shown_state_) {

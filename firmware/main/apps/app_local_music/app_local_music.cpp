@@ -535,7 +535,6 @@ void AppLocalMusic::start_track(std::size_t index) {
     total_seconds_ = 0;
     shown_info_.clear();
     shown_time_.clear();
-    shown_format_.clear();
     analyzer_.reset();
     pcm_tap_.reset();
     spectrum_frame_ = 0;
